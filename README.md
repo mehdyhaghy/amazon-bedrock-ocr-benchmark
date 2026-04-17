@@ -1,6 +1,6 @@
 # Amazon Bedrock OCR Benchmark
 
-A side-by-side benchmarking tool that runs the same document through **Amazon Textract**, **Amazon Bedrock Data Automation (BDA)**, and **8 Amazon Bedrock foundation models** (with every available reasoning-effort variant) — all in parallel — and reports latency, cost, and accuracy vs ground truth.
+A side-by-side benchmarking tool that runs the same document through **Amazon Textract**, **Amazon Bedrock Data Automation (BDA)**, and **7 Amazon Bedrock foundation models** (with every available reasoning-effort variant) — all in parallel — and reports latency, cost, and accuracy vs ground truth.
 
 <img src="asset/sample-ui.png" width="900" alt="UI">
 
@@ -10,7 +10,6 @@ Enabling **Use Bedrock** automatically runs **all 8 configured models**. Models 
 
 | Model | Provider | Reasoning mode | Variants |
 |---|---|---|---|
-| Claude Opus 4.7 | Anthropic | adaptive thinking | off, low, medium, high |
 | Claude Sonnet 4.6 | Anthropic | adaptive thinking | off, low, medium |
 | Claude Haiku 4.5 | Anthropic | budget_tokens | off, 1024, 4096, 16384 |
 | Amazon Nova 2 Lite | Amazon | reasoningConfig | off, low, medium |
@@ -19,7 +18,7 @@ Enabling **Use Bedrock** automatically runs **all 8 configured models**. Models 
 | Llama 4 Maverick 17B | Meta | — | 1 |
 | Llama 4 Scout 17B | Meta | — | 1 |
 
-**Total Bedrock variants per image: 18** (11 thinking configurations + 4 non-thinking models + 3 baselines).
+**Total Bedrock variants per image: 14** (3 Sonnet + 4 Haiku + 3 Nova thinking/off rows + 4 non-thinking models).
 
 All Bedrock calls go through the **Converse API** uniformly for both images and PDFs. Reasoning parameters are passed via `additionalModelRequestFields`:
 
