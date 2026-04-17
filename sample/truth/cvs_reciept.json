@@ -1,0 +1,46 @@
+{
+  "merchant": {
+    "name": "CVS Pharmacy",
+    "address": "6668 Alhambra Ave",
+    "city": "Martinez",
+    "state": "CA",
+    "zip": "94553",
+    "phone": "925.935.9430"
+  },
+  "register": {
+    "reg_number": "01",
+    "transaction_number": "5281",
+    "cashier_number": "0835215",
+    "store_number": "9989",
+    "cashier_name": "SHONDEL"
+  },
+  "extracare_card": "********9502",
+  "items": [
+    {
+      "quantity": 1,
+      "description": "B360 CTN BALL JMBO 70CT",
+      "price": 2.79,
+      "taxable": true
+    },
+    {
+      "quantity": 1,
+      "description": "KISS SALON DIP PWD HAIL",
+      "price": 7.99,
+      "taxable": true
+    },
+    {
+      "quantity": 1,
+      "description": "KISS SALON DIP PWD HAIL",
+      "price": 7.99,
+      "taxable": true
+    }
+  ],
+  "item_count": 3,
+  "survey_id": "5460 7099 0341 634 67",
+  "subtotal": 18.77,
+  "tax_rate": "9.25%",
+  "tax": 1.74,
+  "total": 20.51,
+  "payment_method": "DEBIT",
+  "payment_amount": 20.51
+}
