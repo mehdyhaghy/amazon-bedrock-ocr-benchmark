@@ -1,144 +1,153 @@
 # OCR with AWS AI Services
 
-A comprehensive application for comparing OCR (Optical Character Recognition) capabilities across multiple AWS AI services: Amazon Textract, Amazon Bedrock, and Amazon Bedrock Data Automation (BDA).
-
+A multi-engine OCR benchmark tool for comparing **Amazon Textract**, **Amazon Bedrock** (12 models), and **Amazon Bedrock Data Automation (BDA)** on the same documents — side by side — with latency, cost, and accuracy metrics.
 
 ## Overview
 
-This application provides a unified interface for extracting text and structured data from images using three different AWS AI services:
+This application provides a unified interface for extracting text and structured data from images using three AWS AI services:
 
-1. **Amazon Textract**: AWS's dedicated OCR service for extracting text, forms, and tables from documents
-   - After calling the Amazon Textract API to extract text, the application uses LLM to structure the extracted data into JSON format according to the provided schema.
-2. **Amazon Bedrock**: Using foundation models like Claude for document understanding and extraction
-   - Uses foundation models directly for both extraction and JSON structuring in a single step.
-3. **Amazon Bedrock Data Automation (BDA)**: AWS's specialized image/document analysis service
-   - **Custom Blueprint Method**: Creates a custom document processing blueprint based on the provided JSON schema
-   - **LLM Post-processing Method**: Uses standard BDA extraction followed by Bedrock LLM to structure the data (default method)
+1. **Amazon Textract** — AWS's dedicated OCR service. After text extraction, an LLM structures the output into JSON matching the provided schema.
+2. **Amazon Bedrock** — Foundation models for end-to-end vision + JSON structuring in a single call. The app benchmarks **all configured Bedrock models in parallel**, and for models that support reasoning it runs each at multiple effort levels as separate rows.
+3. **Amazon Bedrock Data Automation (BDA)** — AWS's document analysis service with two modes:
+   - **Custom Blueprint** — creates a custom blueprint from the JSON schema
+   - **LLM Post-processing** (default) — standard BDA extraction followed by Bedrock LLM structuring
 
 <img src="asset/sample-ui.png" width="900" alt="UI">
 
-The application enables side-by-side comparison of these services' accuracy, cost, and processing time across different document types, helping you choose the optimal service for your specific OCR needs.
+## Supported Bedrock Models
+
+All models run through the Bedrock **Converse API** with `additionalModelRequestFields` for provider-specific reasoning parameters.
+
+| Model | Provider | Vision | Reasoning / Effort levels |
+|---|---|---|---|
+| Claude Opus 4.7 | Anthropic | ✅ | adaptive: off, low, medium, high, max |
+| Claude Sonnet 4.6 | Anthropic | ✅ | adaptive: off, low, medium |
+| Claude Sonnet 4 | Anthropic | ✅ | budget_tokens: off, 1024, 4096, 16384 |
+| Claude Haiku 4.5 | Anthropic | ✅ | budget_tokens: off, 1024, 4096, 16384 |
+| Amazon Nova 2 Lite | Amazon | ✅ | reasoningConfig: off, low, medium, high |
+| Ministral 3B | Mistral | ✅ | — |
+| Ministral 8B | Mistral | ✅ | — |
+| Ministral 14B | Mistral | ✅ | — |
+| Pixtral Large | Mistral | ✅ | — |
+| Mistral Large 3 | Mistral | ✅ | — |
+| Llama 4 Maverick 17B | Meta | ✅ | — |
+| Llama 4 Scout 17B | Meta | ✅ | — |
+
+Enabling Bedrock runs **27 parallel configurations** per image (12 models × applicable effort levels), each appearing as a separate row in the benchmark results table.
 
 ## Key Features
 
-- **Multi-Engine OCR Processing**: Process the same document with Textract, Bedrock, and BDA simultaneously
-- **Interactive UI**: User-friendly interface for testing and comparing OCR engines
-- **Performance Comparison**: Side-by-side comparison of extraction quality, processing time, and cost
-- **Accuracy Evaluation**: Compare extracted data against ground truth for objective evaluation
-- **JSON Schema Support**: Structure extracted data according to custom schemas
-- **Cost Calculation**: Real-time cost estimation for each service
-- **Batch Processing**: Process multiple sample documents at once
-- **Result Visualization**: Visual annotation of detected text elements
-
-
-## Architecture
-
-The application follows a modular architecture with several key components:
-
-- **Engine Implementations**: Separate modules for each AWS service (Textract, Bedrock, BDA)
-- **User Interface**: Gradio-based UI for interactive testing and result visualization
-- **Core Processing**: Parallel execution of OCR engines with standardized result handling
-- **Sample Management**: Utilities for working with test documents and sample data
-- **Evaluation Tools**: Components for accuracy assessment and comparison
+- **Benchmark mode** — All 12 Bedrock models run in parallel, with reasoning-capable models expanded into separate runs per effort level
+- **Unified Converse API** — Images and PDFs processed through the same API across all providers
+- **Accuracy evaluation** — Extracted JSON compared against per-sample ground truth with field-level matching
+- **Cost calculation** — Real-time cost estimation per variant
+- **Effort level comparison** — For reasoning-capable models, see how `off` vs `low`/`medium`/`high`/`max` affects latency, cost, and accuracy
+- **Generic schema fallback** — Samples without a specific schema automatically use a generic `{"type": "object"}` template
+- **Thinking block filtering** — Reasoning/thinking content blocks are automatically excluded from extracted text
 
 ## Requirements
 
 - Python 3.10+
-- AWS Account with access to:
-  - Amazon Textract
-  - Amazon Bedrock (with access to supported models)
-  - Amazon Bedrock Data Autmation
+- AWS account with Bedrock, Textract, and BDA access
+- Bedrock **model access** granted for the 12 models listed above in your region
 - AWS credentials configured locally
-- S3 bucket for BDA processing
+- Two S3 buckets (one for Textract/general processing, one for BDA)
 
 ## Installation
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/aws-samples/ocr-with-aws-ai-services.git
-   cd ocr-with-aws-ai-services
-   ```
+```bash
+git clone https://github.com/aws-samples/ocr-with-aws-ai-services.git
+cd ocr-with-aws-ai-services
 
-2. Install required packages:
-   ```
-   pip install -r requirements.txt
-   ```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-3. Configure AWS credentials using one of the following methods:
-   - AWS CLI: `aws configure`
-   - Environment variables
-   - Credentials file (~/.aws/credentials)
+Dependencies (pinned to latest stable as of April 2026):
+- gradio 6.12.0
+- boto3 1.42.90
+- Pillow 12.2.0
+- numpy 2.4.4
+- pandas 3.0.2
+- pymupdf 1.27.2.2
+
+## Configure AWS
+
+```bash
+aws configure   # or set AWS_PROFILE / env vars
+```
+
+Update the default S3 bucket names in `ui.py` (or type your own in the UI at runtime):
+- S3 Bucket for Processing
+- S3 Bucket for BDA Processing
 
 ## Usage
 
-### Starting the Application
-
-Run the application with:
-
-```
+```bash
 python app.py
 ```
 
-This will start the Gradio web interface, typically accessible at http://localhost:7860 (or the URL displayed in your terminal).
+Open http://localhost:7860. Then:
 
-### Using the Interface
-
-1. **Select or Upload an Image**:
-   - Choose from sample images in the dropdown, or
-   - Upload your own image using the upload control
-
-2. **Select OCR Engines**:
-   - Choose one or more OCR engines to use (Textract, Bedrock, BDA)
-   - Configure engine-specific options as needed
-
-3. **Set Processing Options**:
-   - Document type (generic, form, receipt, table, handwritten)
-   - Output JSON schema (for structured data extraction)
-   - Model selection for Bedrock
-   - S3 bucket and blueprint options for BDA
-
-4. **Process the Image**:
-   - Click "Process Sample" to analyze the current image
-   - Click "Process All Samples" to batch process all sample images
-
-5. **View Results**:
-   - Navigate between tabs to see results from each engine
-   - Compare extracted text, structured JSON, and annotated images
-   - View performance metrics including processing time, cost, and accuracy
-   - Use the "Compare" tab to see detailed comparison with ground truth
-
-Modify these settings as needed for your environment.
+1. **Select a sample image** from the dropdown or upload your own
+2. **Pick engines** — check Textract / Bedrock / BDA
+3. **Click "Process File"**
+4. Review results in the comparison table — each row is a model/effort-level variant showing processing time, cost, and accuracy
 
 ## Sample Data
 
-The repository includes sample documents in the `sample/` directory:
+The repo ships with 11 sample images covering various document types:
 
-- `sample/images/`: Test images for OCR processing
-- `sample/schema/`: JSON schemas for structured extraction
-- `sample/truth/`: Ground truth data for accuracy evaluation
+| Sample | Has Schema | Has Truth |
+|---|---|---|
+| driver_license.png | generic fallback | ✅ |
+| graphic.jpg | ✅ | ✅ |
+| handwriting.jpg | ✅ | ✅ |
+| handwriting2.jpg | ✅ | ✅ |
+| insurance_card.png | generic fallback | ✅ |
+| insurance_claim.png | generic fallback | ✅ |
+| nutrition.jpg | ✅ | ✅ |
+| provider_notes.png | generic fallback | ✅ |
+| reverse_sheet.png | ✅ | ✅ |
+| schedule_table.png | ✅ | ✅ |
+| sheet.jpg | ✅ | ✅ |
 
-To add your own samples:
+To add your own:
+1. Drop images into `sample/images/`
+2. (Optional) Add a matching `sample/schema/<basename>.json` — without one, a generic template is used
+3. (Optional) Add a matching `sample/truth/<basename>.json` for accuracy scoring
 
-1. Add images to `sample/images/`
-2. (Optional) Add corresponding JSON schemas with the same base filename in `sample/schema/`
-3. (Optional) Add ground truth data with the same base filename in `sample/truth/`
+## Project Structure
 
-## Results
-
-Processing results are stored in the `results/` directory, organized by processing run and sample. Each run includes:
-
-- Extracted text
-- JSON structured data
-- Annotated visualization images
-- Processing metadata (time, cost, accuracy)
-- Summary reports
-
+```
+.
+├── app.py                      # Gradio entry point
+├── ui.py                       # UI panels
+├── event_handler.py            # Gradio event wiring
+├── processor.py                # Parallel engine orchestration + benchmark expansion
+├── sample_handler.py           # Sample loading + schema fallback logic
+├── preview_handler.py          # Image/PDF preview
+├── engines/
+│   ├── base.py
+│   ├── textract_engine.py
+│   ├── bedrock_engine.py       # Converse API for all models (image + PDF)
+│   └── bda_engine.py
+├── shared/
+│   ├── config.py               # BEDROCK_MODELS, EFFORT_LEVELS, API_COSTS
+│   ├── aws_client.py           # 1-hour read_timeout for bedrock-runtime
+│   ├── image_utils.py
+│   ├── prompt_manager.py
+│   ├── truth_handler.py
+│   ├── evaluator.py            # Recursive field-level accuracy
+│   ├── cost_calculator.py
+│   └── comparison_utils.py
+└── sample/
+    ├── images/
+    ├── schema/
+    └── truth/
+```
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- AWS AI Services teams for providing the underlying OCR capabilities
-- Contributors to the Gradio framework for the UI components
+MIT — see [LICENSE](LICENSE).
