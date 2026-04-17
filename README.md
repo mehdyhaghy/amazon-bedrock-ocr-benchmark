@@ -24,7 +24,7 @@ All models run through the Bedrock **Converse API** with `additionalModelRequest
 | Claude Sonnet 4.6 | Anthropic | ✅ | adaptive: off, low, medium |
 | Claude Sonnet 4 | Anthropic | ✅ | budget_tokens: off, 1024, 4096, 16384 |
 | Claude Haiku 4.5 | Anthropic | ✅ | budget_tokens: off, 1024, 4096, 16384 |
-| Amazon Nova 2 Lite | Amazon | ✅ | reasoningConfig: off, low, medium, high |
+| Amazon Nova 2 Lite | Amazon | ✅ | reasoningConfig: off, low, medium |
 | Ministral 3B | Mistral | ✅ | — |
 | Ministral 8B | Mistral | ✅ | — |
 | Ministral 14B | Mistral | ✅ | — |
@@ -33,17 +33,21 @@ All models run through the Bedrock **Converse API** with `additionalModelRequest
 | Llama 4 Maverick 17B | Meta | ✅ | — |
 | Llama 4 Scout 17B | Meta | ✅ | — |
 
-Enabling Bedrock runs **27 parallel configurations** per image (12 models × applicable effort levels), each appearing as a separate row in the benchmark results table.
+Enabling Bedrock runs **26 parallel configurations** per image (12 models × applicable effort levels).
 
 ## Key Features
 
 - **Benchmark mode** — All 12 Bedrock models run in parallel, with reasoning-capable models expanded into separate runs per effort level
+- **Row-click drill-down** — Click any row in the Comparison Results table to load that variant's raw JSON response in the Bedrock tab
+- **Dynamic Compare dropdown** — The Compare tab's engine picker is populated with every engine variant that produced output, so you can diff any model against ground truth
+- **Live progress indicator** — The global status shows `N/M engines completed...` while runs are in flight, switching to a "completed" banner only when all 27+ variants finish
 - **Unified Converse API** — Images and PDFs processed through the same API across all providers
-- **Accuracy evaluation** — Extracted JSON compared against per-sample ground truth with field-level matching
-- **Cost calculation** — Real-time cost estimation per variant
+- **Accuracy evaluation** — Extracted JSON compared against per-sample ground truth with field-level matching; robust to schema echoes and JSON wrapped in extra text
+- **Cost calculation** — Real-time cost estimation per variant (small values shown in scientific notation)
 - **Effort level comparison** — For reasoning-capable models, see how `off` vs `low`/`medium`/`high`/`max` affects latency, cost, and accuracy
 - **Generic schema fallback** — Samples without a specific schema automatically use a generic `{"type": "object"}` template
 - **Thinking block filtering** — Reasoning/thinking content blocks are automatically excluded from extracted text
+- **Long-latency safe** — 1-hour read timeout on Bedrock clients for deep reasoning runs
 
 ## Requirements
 

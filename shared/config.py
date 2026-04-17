@@ -36,7 +36,7 @@ EFFORT_LEVELS = {
     "us.anthropic.claude-sonnet-4-6": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-sonnet-4-20250514-v1:0": ("budget", [1024, 4096, 16384]),
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": ("budget", [1024, 4096, 16384]),
-    "us.amazon.nova-2-lite-v1:0": ("nova", ["low", "medium", "high"]),
+    "us.amazon.nova-2-lite-v1:0": ("nova", ["low", "medium"]),
 }
 
 # API cost information - Only for APIs currently in use

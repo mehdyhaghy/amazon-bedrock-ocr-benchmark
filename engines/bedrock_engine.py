@@ -201,7 +201,6 @@ class BedrockEngine(OCREngine):
                         }
                     ]
                     
-                    # Call the converse API with reasoning config if applicable
                     converse_args = {
                         "modelId": model_id,
                         "messages": messages,
@@ -285,7 +284,23 @@ class BedrockEngine(OCREngine):
                 try:
                     structured_json = json.loads(extracted_text)
                 except json.JSONDecodeError:
-                    structured_json = {"text": extracted_text}
+                    # Try to extract JSON from mixed content (find first { ... last })
+                    try:
+                        start = extracted_text.find('{')
+                        end = extracted_text.rfind('}')
+                        if start != -1 and end > start:
+                            structured_json = json.loads(extracted_text[start:end + 1])
+                        else:
+                            structured_json = {"text": extracted_text}
+                    except json.JSONDecodeError:
+                        structured_json = {"text": extracted_text}
+                
+                # Unwrap schema-style responses: when the model echoes the schema structure
+                # and nests the actual extracted values inside "properties"
+                if (isinstance(structured_json, dict)
+                        and set(structured_json.keys()) <= {"type", "properties", "required", "items", "$schema"}
+                        and isinstance(structured_json.get("properties"), dict)):
+                    structured_json = structured_json["properties"]
                 
                 logger.info(f"Bedrock processing completed in {timing_ctx.process_time:.2f} seconds")
                 overall_process_time = time.time() - overall_start_time
