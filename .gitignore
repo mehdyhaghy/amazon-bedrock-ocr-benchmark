@@ -1,3 +1,47 @@
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# Environment & secrets
 Config
-results
+.env.local
+*.pem
+*.key
+.aws/
+credentials
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Project outputs
+results/
+generated-diagrams/
+*.log
+
+# Gradio
+.gradio/
+flagged/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build artifacts
+build/
+dist/
+*.egg

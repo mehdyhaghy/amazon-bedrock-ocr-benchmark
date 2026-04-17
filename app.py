@@ -7,7 +7,7 @@ from event_handler import setup_event_handlers
 
 def create_ocr_app():
     """Create the OCR application with all components"""
-    with gr.Blocks(theme=CUSTOM_THEME) as app:
+    with gr.Blocks() as app:
         gr.Markdown("# 📝 Multi-Engine OCR Application\n\nUpload an image containing text and select your preferred processing engines.")
         
         # Current timestamp display
@@ -64,4 +64,4 @@ def create_ocr_app():
 
 if __name__ == "__main__":
     demo = create_ocr_app()
-    demo.launch(share=False)
+    demo.launch(share=False, theme=CUSTOM_THEME)

@@ -4,7 +4,7 @@ import pandas as pd
 import os
 
 # Import from reorganized modules
-from shared.config import logger, BEDROCK_MODELS, STATUS_HTML, POSTPROCESSING_MODEL
+from shared.config import logger, BEDROCK_MODELS, STATUS_HTML, POSTPROCESSING_MODEL, EFFORT_LEVELS
 from engines.textract_engine import TextractEngine
 from engines.bedrock_engine import BedrockEngine
 from engines.bda_engine import BDAEngine
@@ -87,12 +87,6 @@ def process_engine_result(engine_name, result, truth_data, truth_exists):
             cost = textract_base_cost
             status_html = STATUS_HTML["completed"]("Textract", process_time, cost)
     
-    elif engine_name == "Bedrock":
-        model_id = result.get('model_id', '')
-        if token_usage and model_id:
-            cost_html, cost = calculate_bedrock_cost(model_id, token_usage)
-        status_html = STATUS_HTML["completed"]("Bedrock", process_time, cost)
-    
     elif engine_name == "BDA":
         field_count = result.get('field_count', 0)
         use_blueprint = result.get('use_blueprint', False)
@@ -109,6 +103,13 @@ def process_engine_result(engine_name, result, truth_data, truth_exists):
             status_html = STATUS_HTML["completed"]("BDA", process_time, cost, cost_detail)
         else:
             status_html = STATUS_HTML["completed"]("BDA", process_time, cost)
+    
+    else:
+        # Any other engine name is treated as a Bedrock model variant
+        model_id = result.get('model_id', '')
+        if token_usage and model_id:
+            cost_html, cost = calculate_bedrock_cost(model_id, token_usage)
+        status_html = STATUS_HTML["completed"](engine_name, process_time, cost)
     
     # Calculate accuracy if truth data is available
     if truth_exists and json_data:
@@ -139,15 +140,16 @@ def create_comparison_view_for_engines(truth_data, truth_exists, engine_results)
     
     # Check for any available processed results
     available_engines = []
-    for engine_name in ["Bedrock", "Textract", "BDA"]:
-        if engine_name in engine_results and engine_results[engine_name]["json"]:
-            available_engines.append(engine_name)
+    for engine_name in list(engine_results.keys()):
+        if engine_name in ["Textract", "BDA"] or engine_name == "Bedrock" or engine_name.startswith("Bedrock ("):
+            if engine_results[engine_name].get("json"):
+                available_engines.append(engine_name)
     
     if not available_engines:
         return "<div>No engine results available for comparison</div>"
     
-    # Default to Bedrock if available, otherwise use first available engine
-    preferred_engine = "Bedrock" if "Bedrock" in available_engines else available_engines[0]
+    # Default to first Bedrock variant if available
+    preferred_engine = next((e for e in available_engines if e == "Bedrock" or e.startswith("Bedrock (")), available_engines[0])
     engine_json = engine_results[preferred_engine]["json"]
     
     detailed_results = get_detailed_accuracy(engine_json, truth_data)
@@ -171,7 +173,7 @@ def create_results_dataframe(engine_results):
     return pd.DataFrame(final_results)
 
 def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
-                             bedrock_model_name, bda_s3_bucket="", s3_bucket="ocr-with-ai-services-demo-bucket",
+                             bedrock_model_name, bda_s3_bucket="", s3_bucket="ocr-demo-403202188152",
                              document_type="generic", enable_structured_output=True, output_schema="",
                              use_bda_blueprint=False, image_name=None):
     """Process image with selected OCR engines in parallel"""
@@ -184,6 +186,20 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         "Bedrock": default_bedrock_result.copy() if use_bedrock else default_bedrock_result.copy(),
         "BDA": default_result.copy() if use_bda else default_result.copy()
     }    
+
+    # Helper to get first Bedrock result for UI tab display
+    def _bedrock_result():
+        for k, v in engine_results.items():
+            if k == "Bedrock" or k.startswith("Bedrock ("):
+                if v.get("text") or v.get("json"):
+                    return v
+        return engine_results.get("Bedrock", default_bedrock_result)
+
+    def _bedrock_status():
+        for k, v in engine_status.items():
+            if (k == "Bedrock" or k.startswith("Bedrock (")) and v != "<div></div>":
+                return v
+        return engine_status.get("Bedrock", "<div></div>")
 
     # Empty results for error cases
     empty_df = pd.DataFrame({
@@ -243,13 +259,13 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         engine_results.get("Textract", {}).get("json"), 
         engine_results.get("Textract", {}).get("image"),
         
-        engine_status.get("Bedrock", "<div></div>"), 
-        engine_results.get("Bedrock", {}).get("text", ""), 
-        engine_results.get("Bedrock", {}).get("json"), 
-        engine_results.get("Bedrock", {}).get("image"),
+        _bedrock_status(), 
+        _bedrock_result().get("text", ""), 
+        _bedrock_result().get("json"), 
+        _bedrock_result().get("image"),
         
-        "<div></div>" if not use_bedrock else engine_results.get("Bedrock", {}).get("cost_html", "<div></div>"), 
-        None if not use_bedrock else engine_results.get("Bedrock", {}).get("token_usage"),
+        "<div></div>" if not use_bedrock else _bedrock_result().get("cost_html", "<div></div>"), 
+        None if not use_bedrock else _bedrock_result().get("token_usage"),
         
         engine_status.get("BDA", "<div></div>"), 
         engine_results.get("BDA", {}).get("text", ""), 
@@ -285,15 +301,35 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
             )
         
         if use_bedrock:
-            futures['Bedrock'] = executor.submit(
-                bedrock_engine.process_image, 
-                image,
-                {
-                    'model_id': model_id,
-                    'document_type': document_type,
-                    'output_schema': output_schema if output_schema else None
-                }
-            )
+            # Benchmark mode: run ALL Bedrock models in parallel.
+            # Thinking-capable models expand into multiple variants (off + each effort level).
+            for display_name, m_id in BEDROCK_MODELS.items():
+                effort_config = EFFORT_LEVELS.get(m_id)
+                if effort_config:
+                    _, levels = effort_config
+                    variants = [("off", None)] + [(str(l), l) for l in levels]
+                    for label_suffix, level in variants:
+                        label = f"{display_name} ({label_suffix})"
+                        futures[label] = executor.submit(
+                            bedrock_engine.process_image,
+                            image,
+                            {
+                                'model_id': m_id,
+                                'document_type': document_type,
+                                'output_schema': output_schema if output_schema else None,
+                                'effort_level': level
+                            }
+                        )
+                else:
+                    futures[display_name] = executor.submit(
+                        bedrock_engine.process_image,
+                        image,
+                        {
+                            'model_id': m_id,
+                            'document_type': document_type,
+                            'output_schema': output_schema if output_schema else None
+                        }
+                    )
         
         if use_bda:
             futures['BDA'] = executor.submit(
@@ -347,13 +383,13 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     engine_results.get("Textract", {}).get("json"), 
                     engine_results.get("Textract", {}).get("image"),
                     
-                    engine_status.get("Bedrock", "<div></div>"), 
-                    engine_results.get("Bedrock", {}).get("text", ""), 
-                    engine_results.get("Bedrock", {}).get("json"), 
-                    engine_results.get("Bedrock", {}).get("image"),
+                    _bedrock_status(), 
+                    _bedrock_result().get("text", ""), 
+                    _bedrock_result().get("json"), 
+                    _bedrock_result().get("image"),
                     
-                    "<div></div>" if not use_bedrock else engine_results.get("Bedrock", {}).get("cost_html", "<div></div>"), 
-                    None if not use_bedrock else engine_results.get("Bedrock", {}).get("token_usage"),
+                    "<div></div>" if not use_bedrock else _bedrock_result().get("cost_html", "<div></div>"), 
+                    None if not use_bedrock else _bedrock_result().get("token_usage"),
                     
                     engine_status.get("BDA", "<div></div>"), 
                     engine_results.get("BDA", {}).get("text", ""), 
@@ -397,13 +433,13 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     engine_results.get("Textract", {}).get("json"), 
                     engine_results.get("Textract", {}).get("image"),
                     
-                    engine_status.get("Bedrock", "<div></div>"), 
-                    engine_results.get("Bedrock", {}).get("text", ""), 
-                    engine_results.get("Bedrock", {}).get("json"), 
-                    engine_results.get("Bedrock", {}).get("image"),
+                    _bedrock_status(), 
+                    _bedrock_result().get("text", ""), 
+                    _bedrock_result().get("json"), 
+                    _bedrock_result().get("image"),
                     
-                    "<div></div>" if not use_bedrock else engine_results.get("Bedrock", {}).get("cost_html", "<div></div>"), 
-                    None if not use_bedrock else engine_results.get("Bedrock", {}).get("token_usage"),
+                    "<div></div>" if not use_bedrock else _bedrock_result().get("cost_html", "<div></div>"), 
+                    None if not use_bedrock else _bedrock_result().get("token_usage"),
                     
                     engine_status.get("BDA", "<div></div>"), 
                     engine_results.get("BDA", {}).get("text", ""), 
@@ -441,13 +477,13 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         engine_results.get("Textract", {}).get("json"), 
         engine_results.get("Textract", {}).get("image"),
         
-        engine_status.get("Bedrock", "<div></div>"), 
-        engine_results.get("Bedrock", {}).get("text", ""), 
-        engine_results.get("Bedrock", {}).get("json"), 
-        engine_results.get("Bedrock", {}).get("image"),
+        _bedrock_status(), 
+        _bedrock_result().get("text", ""), 
+        _bedrock_result().get("json"), 
+        _bedrock_result().get("image"),
         
-        "<div></div>" if not use_bedrock else engine_results.get("Bedrock", {}).get("cost_html", "<div></div>"), 
-        None if not use_bedrock else engine_results.get("Bedrock", {}).get("token_usage"),
+        "<div></div>" if not use_bedrock else _bedrock_result().get("cost_html", "<div></div>"), 
+        None if not use_bedrock else _bedrock_result().get("token_usage"),
         
         engine_status.get("BDA", "<div></div>"), 
         engine_results.get("BDA", {}).get("text", ""), 

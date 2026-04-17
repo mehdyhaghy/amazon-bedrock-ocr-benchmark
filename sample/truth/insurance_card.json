@@ -1,0 +1,22 @@
+{
+  "document_type": "Health Insurance Card",
+  "insurance_company": "Group Insurance of America",
+  "plan_type": "Community Plan",
+  "health_plan_code": "80840",
+  "health_plan_number": "911-87726-04",
+  "member_id": "11-2234-10190",
+  "member_name": "JOHN DOE",
+  "group_number": "AAAAA",
+  "payer_id": "87726",
+  "pcp_name": "MATEO JACKSON, PhD",
+  "pcp_phone": "(920)-555-0101",
+  "prescription_info": {
+    "label": "InsurRX",
+    "rx_bin": "610494",
+    "rx_grp": "AAAAA",
+    "rx_pcn": "00000"
+  },
+  "card_code": "0501",
+  "footer_text": "Administered by Amer. Insurance Community Plan, Inc.",
+  "plan_name": "MEDICAID PLAN OF XXXX"
+}

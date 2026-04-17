@@ -43,8 +43,9 @@ def load_sample_image_and_schema(sample_filename):
     # Return the file path instead of PIL Image object for Gradio File component
     logger.info(f"Found sample image: {image_path}")
     
-    # Load the schema if available
-    schema = None
+    # Load the schema if available, else fall back to generic template
+    generic_schema = '{\n  "type": "object"\n}'
+    schema = generic_schema
     schema_path = os.path.join("sample/schema", os.path.splitext(sample_filename)[0] + ".json")
     
     if os.path.exists(schema_path):
@@ -55,11 +56,13 @@ def load_sample_image_and_schema(sample_filename):
                 json.loads(schema)
                 logger.info(f"Loaded schema: {schema_path}")
         except json.JSONDecodeError:
-            logger.error(f"Invalid JSON schema: {schema_path}")
+            logger.error(f"Invalid JSON schema: {schema_path}, using generic template")
+            schema = generic_schema
         except Exception as e:
-            logger.error(f"Error loading schema: {str(e)}")
+            logger.error(f"Error loading schema: {str(e)}, using generic template")
+            schema = generic_schema
     else:
-        logger.info(f"No schema found for sample: {schema_path}")
+        logger.info(f"No schema found for sample: {schema_path}, using generic template")
     
     return image_path, schema
 
@@ -88,7 +91,7 @@ def on_sample_selected(sample_filename):
 
 
 def process_all_samples(use_textract, use_bedrock, use_bda,
-                     bedrock_model_name, bda_s3_bucket="", s3_bucket="ocr-with-ai-services-demo-bucket",
+                     bedrock_model_name, bda_s3_bucket="", s3_bucket="ocr-demo-403202188152",
                      document_type="generic", enable_structured_output=True, output_schema="",
                      use_bda_blueprint=False):
     """Process all sample images with parallel engine processing"""
@@ -257,8 +260,8 @@ def process_all_samples(use_textract, use_bedrock, use_bda,
     return status_html, pd.DataFrame(final_results)
 
 
-def load_sample_schema(sample_name, default_schema=""):
-    """Load sample-specific schema if available"""
+def load_sample_schema(sample_name, default_schema='{\n  "type": "object"\n}'):
+    """Load sample-specific schema if available, else return generic template"""
     sample_schema = None
     schema_path = os.path.join("sample/schema", os.path.splitext(sample_name)[0] + ".json")
     

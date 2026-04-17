@@ -10,16 +10,34 @@ MAX_IMAGE_SIZE = 5 * 1024 * 1024 - 100000  # 5MB minus buffer for Bedrock
 
 # Available Bedrock models
 BEDROCK_MODELS = {
+    "Claude Opus 4.7": "us.anthropic.claude-opus-4-7",
+    "Claude Sonnet 4.6": "us.anthropic.claude-sonnet-4-6",
     "Claude Sonnet 4": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    "Claude 3.7 Sonnet": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "Claude 3.5 Sonnet": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "Amazon Nova Premier": "us.amazon.nova-premier-v1:0",
-    "Amazon Nova Pro": "us.amazon.nova-pro-v1:0"
+    "Claude Haiku 4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "Amazon Nova 2 Lite": "us.amazon.nova-2-lite-v1:0",
+    "Ministral 3B": "mistral.ministral-3-3b-instruct",
+    "Ministral 8B": "mistral.ministral-3-8b-instruct",
+    "Ministral 14B": "mistral.ministral-3-14b-instruct",
+    "Pixtral Large": "us.mistral.pixtral-large-2502-v1:0",
+    "Mistral Large 3": "mistral.mistral-large-3-675b-instruct",
+    "Llama 4 Maverick 17B": "us.meta.llama4-maverick-17b-instruct-v1:0",
+    "Llama 4 Scout 17B": "us.meta.llama4-scout-17b-instruct-v1:0"
 }
 
 # Default model for post-processing
-# POSTPROCESSING_MODEL = "anthropic.claude-3-5-haiku-20241022-v1:0"
-POSTPROCESSING_MODEL = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+POSTPROCESSING_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# Effort levels per model: maps model_id to (thinking_type, list_of_levels)
+# - "adaptive": Claude Opus 4.7 / Sonnet 4.6 — uses thinking.type="adaptive" + effort param via invoke_model
+# - "budget": Claude Sonnet 4 / Haiku 4.5 — uses thinking.type="enabled" + budget_tokens via invoke_model
+# - "nova": Nova 2 Lite — uses reasoningConfig via converse additionalModelRequestFields
+EFFORT_LEVELS = {
+    "us.anthropic.claude-opus-4-7": ("adaptive", ["low", "medium", "high", "max"]),
+    "us.anthropic.claude-sonnet-4-6": ("adaptive", ["low", "medium"]),
+    "us.anthropic.claude-sonnet-4-20250514-v1:0": ("budget", [1024, 4096, 16384]),
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0": ("budget", [1024, 4096, 16384]),
+    "us.amazon.nova-2-lite-v1:0": ("nova", ["low", "medium", "high"]),
+}
 
 # API cost information - Only for APIs currently in use
 API_COSTS = {
@@ -29,30 +47,56 @@ API_COSTS = {
     
     'bedrock': {
         # Claude models
+        'us.anthropic.claude-opus-4-7': {
+            'input': 0.005 / 1000,   # $5.00 per 1M input tokens
+            'output': 0.025 / 1000   # $25.00 per 1M output tokens
+        },
+        'us.anthropic.claude-sonnet-4-6': {
+            'input': 0.003 / 1000,   # $3.00 per 1M input tokens
+            'output': 0.015 / 1000   # $15.00 per 1M output tokens
+        },
         'us.anthropic.claude-sonnet-4-20250514-v1:0': {
-            'input': 0.003 / 1000,   # $0.003 per 1,000 input tokens
-            'output': 0.015 / 1000   # $0.015 per 1,000 output tokens
+            'input': 0.003 / 1000,   # $3.00 per 1M input tokens
+            'output': 0.015 / 1000   # $15.00 per 1M output tokens
         },
-        'us.anthropic.claude-3-7-sonnet-20250219-v1:0': {
-            'input': 0.003 / 1000,   # $0.003 per 1,000 input tokens
-            'output': 0.015 / 1000   # $0.015 per 1,000 output tokens
-        },
-        'us.anthropic.claude-3-5-sonnet-20240620-v1:0': {
-            'input': 0.003 / 1000,   # $0.003 per 1,000 input tokens
-            'output': 0.015 / 1000   # $0.015 per 1,000 output tokens
+        'us.anthropic.claude-haiku-4-5-20251001-v1:0': {
+            'input': 0.001 / 1000,   # $1.00 per 1M input tokens
+            'output': 0.005 / 1000   # $5.00 per 1M output tokens
         },
         # Nova models
-        'us.amazon.nova-premier-v1:0': {
-            'input': 0.0025 / 1000,  # $0.0025 per 1,000 input tokens
-            'output': 0.0125 / 1000  # $0.0125 per 1,000 output tokens
+        'us.amazon.nova-2-lite-v1:0': {
+            'input': 0.00008 / 1000,  # $0.08 per 1M input tokens
+            'output': 0.00032 / 1000  # $0.32 per 1M output tokens
         },
-        'us.amazon.nova-pro-v1:0': {
-            'input': 0.0008 / 1000,  # $0.0008 per 1,000 input tokens
-            'output': 0.0032 / 1000  # $0.0032 per 1,000 output tokens
+        # Ministral models
+        'mistral.ministral-3-3b-instruct': {
+            'input': 0.00004 / 1000,  # $0.04 per 1M input tokens
+            'output': 0.00004 / 1000  # $0.04 per 1M output tokens
         },
-        'anthropic.claude-3-5-haiku-20241022-v1:0': {
-            'input': 0.0008 / 1000,   # $0.0008 per 1,000 input tokens
-            'output': 0.004 / 1000    # $0.004 per 1,000 output tokens
+        'mistral.ministral-3-8b-instruct': {
+            'input': 0.00018 / 1000,  # $0.18 per 1M input tokens
+            'output': 0.00018 / 1000  # $0.18 per 1M output tokens
+        },
+        'mistral.ministral-3-14b-instruct': {
+            'input': 0.00024 / 1000,  # $0.24 per 1M input tokens
+            'output': 0.00024 / 1000  # $0.24 per 1M output tokens
+        },
+        'us.mistral.pixtral-large-2502-v1:0': {
+            'input': 0.002 / 1000,    # $2.00 per 1M input tokens
+            'output': 0.006 / 1000    # $6.00 per 1M output tokens
+        },
+        'mistral.mistral-large-3-675b-instruct': {
+            'input': 0.002 / 1000,    # $2.00 per 1M input tokens
+            'output': 0.006 / 1000    # $6.00 per 1M output tokens
+        },
+        # Meta Llama 4 models
+        'us.meta.llama4-maverick-17b-instruct-v1:0': {
+            'input': 0.00020 / 1000,  # $0.20 per 1M input tokens
+            'output': 0.00060 / 1000  # $0.60 per 1M output tokens
+        },
+        'us.meta.llama4-scout-17b-instruct-v1:0': {
+            'input': 0.00015 / 1000,  # $0.15 per 1M input tokens
+            'output': 0.00045 / 1000  # $0.45 per 1M output tokens
         }
     },
     'bda': {

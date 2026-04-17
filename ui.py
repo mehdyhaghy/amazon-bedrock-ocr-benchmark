@@ -113,7 +113,7 @@ def create_common_options_panel():
         with gr.Row():
             s3_bucket = gr.Textbox(
                 label="S3 Bucket for Processing",
-                value="ocr-with-ai-services-demo-bucket",
+                value="ocr-demo-403202188152",
                 placeholder="Enter your S3 bucket name",
                 info="S3 bucket for uploading files for processing (required for all engines)",
                 scale=2
@@ -121,7 +121,7 @@ def create_common_options_panel():
             
             bda_s3_bucket = gr.Textbox(
                 label="S3 Bucket for BDA Processing",
-                value="my-bda-demo-bucket",
+                value="bda-demo-403202188152",
                 placeholder="Enter your S3 bucket name for BDA",
                 info="S3 bucket specifically for BDA processing",
                 scale=2
@@ -133,7 +133,7 @@ def create_common_options_panel():
         with gr.Row():
             bedrock_model = gr.Dropdown(
                 choices=list(BEDROCK_MODELS.keys()),
-                value="Claude Sonnet 4",
+                value="Claude Sonnet 4.6",
                 label="Bedrock Model",
                 info="Select an Amazon Bedrock model for processing",
                 scale=2
@@ -152,7 +152,7 @@ def create_common_options_panel():
         output_schema = gr.Code(
             language="json",
             label="Output Schema",
-            value="{\n  \"type\": \"object\",\n  \"properties\": {\n    \"text\": {\n      \"type\": \"string\"\n    }\n  }\n}"
+            value="{\n  \"type\": \"object\"\n}"
         )
     
     return panel, s3_bucket, document_type, enable_structured_output, output_schema, bedrock_model, bda_s3_bucket, use_bda_blueprint

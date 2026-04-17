@@ -14,6 +14,26 @@ from shared.image_utils import convert_to_bytes
 from shared.config import logger, API_COSTS, MAX_IMAGE_SIZE
 from shared.prompt_manager import get_prompt_for_document_type, get_json_formatting_instructions, OCR_SYSTEM_PROMPT
 
+def _build_thinking_params(model_id, effort_level):
+    """Build reasoning params for the Converse API additionalModelRequestFields.
+    effort_level=None means thinking is disabled (standard call).
+    Field name is provider-specific: Claude uses 'thinking', Nova uses 'reasoningConfig'."""
+    from shared.config import EFFORT_LEVELS
+    if effort_level is None or model_id not in EFFORT_LEVELS:
+        return {}
+    thinking_type, _ = EFFORT_LEVELS[model_id]
+    if thinking_type == "adaptive":
+        # Claude Opus 4.7 / Sonnet 4.6 — adaptive thinking with effort in output_config
+        return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort_level}}
+    elif thinking_type == "budget":
+        # Claude Sonnet 4 / Haiku 4.5 — manual budget_tokens
+        budget = effort_level if isinstance(effort_level, int) else 4096
+        return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+    elif thinking_type == "nova":
+        # Nova 2 Lite — reasoningConfig nested inside inferenceConfig
+        return {"inferenceConfig": {"reasoningConfig": {"type": "enabled", "maxReasoningEffort": effort_level}}}
+    return {}
+
 class BedrockEngine(OCREngine):
     """
     Implementation of OCR engine using Amazon Bedrock
@@ -46,6 +66,9 @@ class BedrockEngine(OCREngine):
         model_id = options.get('model_id', '')
         document_type = options.get('document_type', 'generic')
         output_schema = options.get('output_schema')
+        effort_level = options.get('effort_level')
+        
+        reasoning_config = _build_thinking_params(model_id, effort_level)
         
         overall_start_time = time.time()
         # Set up timing context manager
@@ -100,64 +123,62 @@ class BedrockEngine(OCREngine):
                     
                 # Create request payload based on file type
                 if is_pdf:
-                    # For PDF files, use invoke_model API
-                    pdf_base64 = base64.b64encode(file_bytes).decode('utf-8')
-                    
-                    # Create request body for invoke_model (no citations, no cache)
-                    request_body = {
-                        "anthropic_version": "bedrock-2023-05-31",
-                        "max_tokens": 4000,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "document",
+                    # For PDF files, use converse API with document content block
+                    messages = [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "document": {
+                                        "format": "pdf",
+                                        "name": "document",
                                         "source": {
-                                            "type": "base64",
-                                            "media_type": "application/pdf",
-                                            "data": pdf_base64
+                                            "bytes": file_bytes
                                         }
-                                    },
-                                    {
-                                        "type": "text",
-                                        "text": prompt
                                     }
-                                ]
-                            }
-                        ]
+                                },
+                                {
+                                    "text": prompt
+                                }
+                            ]
+                        }
+                    ]
+                    
+                    converse_args = {
+                        "modelId": model_id,
+                        "messages": messages,
+                        "system": [{"text": system_prompt}],
+                        "inferenceConfig": {"maxTokens": 32000 if reasoning_config else 4000}
                     }
+                    if reasoning_config:
+                        converse_args["additionalModelRequestFields"] = reasoning_config
                     
-                    # Add system prompt if provided
-                    if system_prompt:
-                        request_body["system"] = system_prompt
+                    response = bedrock_runtime.converse(**converse_args)
                     
-                    # Use invoke_model for PDF
-                    response = bedrock_runtime.invoke_model(
-                        modelId=model_id,
-                        body=json.dumps(request_body),
-                        contentType='application/json',
-                        accept='application/json'
-                    )
-                    
-                    # Parse invoke_model response
-                    response_body = json.loads(response['body'].read())
-                    
-                    # Extract text from invoke_model response
+                    # Extract text from converse response
                     extracted_text = ""
-                    for block in response_body.get('content', []):
-                        if block.get('type') == 'text':
-                            extracted_text += block.get('text', '')
+                    if 'output' in response and 'message' in response['output']:
+                        for content_item in response['output']['message'].get('content', []):
+                            if content_item.get('type') == 'thinking' or 'reasoningContent' in content_item:
+                                continue
+                            if 'text' in content_item:
+                                text = content_item['text'].strip()
+                                if text.startswith("```json"):
+                                    text = text[7:]
+                                if text.startswith("```"):
+                                    text = text[3:]
+                                if text.endswith("```"):
+                                    text = text[:-3]
+                                extracted_text += text.strip()
                     
-                    # Extract token usage for invoke_model
-                    usage = response_body.get('usage', {})
+                    # Extract token usage
                     token_usage = {
-                        'inputTokens': usage.get('input_tokens', 0),
-                        'outputTokens': usage.get('output_tokens', 0),
-                        'totalTokens': usage.get('input_tokens', 0) + usage.get('output_tokens', 0)
+                        'inputTokens': response.get('usage', {}).get('inputTokens', 0),
+                        'outputTokens': response.get('usage', {}).get('outputTokens', 0),
+                        'totalTokens': response.get('usage', {}).get('totalTokens', 0)
                     }
                     
-                    logger.info(f"PDF processed with invoke_model - Input: {token_usage['inputTokens']}, Output: {token_usage['outputTokens']}")
+                    logger.info(f"PDF processed with converse - Input: {token_usage['inputTokens']}, Output: {token_usage['outputTokens']}")
                     
                 else:
                     # For images, use converse API
@@ -180,12 +201,15 @@ class BedrockEngine(OCREngine):
                         }
                     ]
                     
-                    # Call the converse API with system messages (no citations or cache)
+                    # Call the converse API with reasoning config if applicable
                     converse_args = {
                         "modelId": model_id,
                         "messages": messages,
-                        "system": [{"text": system_prompt}]
+                        "system": [{"text": system_prompt}],
+                        "inferenceConfig": {"maxTokens": 32000 if reasoning_config else 4000}
                     }
+                    if reasoning_config:
+                        converse_args["additionalModelRequestFields"] = reasoning_config
                     
                     response = bedrock_runtime.converse(**converse_args)
                     
@@ -206,6 +230,8 @@ class BedrockEngine(OCREngine):
                         message = response['output']['message']
                         if 'content' in message:
                             for content_item in message['content']:
+                                if content_item.get('type') == 'thinking' or 'reasoningContent' in content_item:
+                                    continue
                                 if 'text' in content_item:
                                     text = content_item['text']
                                     # Remove any markdown code block wrapping

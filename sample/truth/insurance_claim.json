@@ -1,0 +1,194 @@
+{
+  "form_title": "HEALTH INSURANCE CLAIM FORM",
+  "approved": "OMB-0938-0008",
+  "form_number": "FORM HCFA-1500 (12-90), FORM RRB-1500, FORM OWCP-1500",
+  "approved_by": "AMA COUNCIL ON MEDICAL SERVICE 8/88",
+  "instruction": "PLEASE DO NOT STAPLE IN THIS AREA",
+  "print_instruction": "PLEASE PRINT OR TYPE",
+  "insurance_type": {
+    "medicare": true,
+    "medicaid": false,
+    "champus": false,
+    "champva": false,
+    "group_health_plan": false,
+    "feca_blk_lung": false,
+    "other": false
+  },
+  "1a_insureds_id_number": "11-2234-10190",
+  "2_patient_name": "Doe, John",
+  "3_patient_birth_date": {
+    "mm": "",
+    "dd": "",
+    "yy": "",
+    "sex": "M"
+  },
+  "4_insured_name": "Doe, Jane",
+  "5_patient_address": {
+    "street": "123 Any Street",
+    "city": "Any City",
+    "state": "CA",
+    "zip": "92127",
+    "telephone": "(858) 555-0100"
+  },
+  "6_patient_relationship_to_insured": "Spouse",
+  "7_insured_address": {
+    "street": "123 Any Street",
+    "city": "Any City",
+    "state": "CA",
+    "zip": "92127",
+    "telephone": "(858) 555-0100"
+  },
+  "8_patient_status": {
+    "marital": "Married",
+    "employment": ""
+  },
+  "9_other_insured_name": "",
+  "9a_other_insured_policy_or_group_number": "",
+  "9b_other_insured_date_of_birth": {
+    "mm": "",
+    "dd": "",
+    "yy": "",
+    "sex": ""
+  },
+  "9c_employer_or_school_name": "",
+  "9d_insurance_plan_name": "",
+  "10_is_patient_condition_related_to": {
+    "a_employment": "NO",
+    "b_auto_accident": "NO",
+    "b_place_state": "",
+    "c_other_accident": "NO"
+  },
+  "10d_reserved_for_local_use": "",
+  "11_insured_policy_group_or_feca_number": "G4683A",
+  "11a_insured_date_of_birth": {
+    "mm": "06",
+    "dd": "12",
+    "yy": "65",
+    "sex": "F"
+  },
+  "11b_employer_or_school_name": "",
+  "11c_insurance_plan_or_program_name": "Group Insur of Amer.",
+  "11d_another_health_benefit_plan": "NO",
+  "12_patient_signature": {
+    "signed": "Jdoe",
+    "date": "01-15-2021"
+  },
+  "13_insured_signature": "Jane Doe",
+  "14_date_of_current_illness": {
+    "mm": "10",
+    "dd": "11",
+    "yy": "21",
+    "type": "ILLNESS (First symptom) OR INJURY (Accident) OR PREGNANCY(LMP)"
+  },
+  "15_first_date_same_or_similar_illness": {
+    "mm": "10",
+    "dd": "11",
+    "yy": "21"
+  },
+  "16_dates_patient_unable_to_work": {
+    "from": "",
+    "to": ""
+  },
+  "17_referring_physician_name": "Self",
+  "17a_referring_physician_id": "",
+  "18_hospitalization_dates": {
+    "from": "",
+    "to": ""
+  },
+  "19_reserved_for_local_use": "",
+  "20_outside_lab": {
+    "selection": "",
+    "charges": ""
+  },
+  "21_diagnosis": [
+    {
+      "line": 1,
+      "code": "R11.0"
+    },
+    {
+      "line": 2,
+      "code": "K59.00"
+    },
+    {
+      "line": 3,
+      "code": "R19.7"
+    },
+    {
+      "line": 4,
+      "code": "K92.1"
+    }
+  ],
+  "22_medicaid_resubmission": {
+    "code": "",
+    "original_ref_no": ""
+  },
+  "23_prior_authorization_number": "",
+  "24_service_lines": [
+    {
+      "line": 1,
+      "date_from": "10 11 21",
+      "date_to": "",
+      "place_of_service": "11",
+      "type_of_service": "",
+      "cpt_hcpcs": "90801",
+      "modifier": "",
+      "diagnosis_code": "",
+      "charges": "170.00",
+      "days_or_units": "",
+      "epsdt_family_plan": "",
+      "emg": "",
+      "cob": "",
+      "reserved_for_local_use": "1234567890"
+    },
+    {
+      "line": 2,
+      "date_from": "10 11 21",
+      "date_to": "",
+      "place_of_service": "11",
+      "type_of_service": "",
+      "cpt_hcpcs": "90805",
+      "modifier": "",
+      "diagnosis_code": "",
+      "charges": "140.00",
+      "days_or_units": "",
+      "epsdt_family_plan": "",
+      "emg": "",
+      "cob": "",
+      "reserved_for_local_use": "1234567890"
+    },
+    {
+      "line": 3,
+      "date_from": "10 11 21",
+      "date_to": "",
+      "place_of_service": "11",
+      "type_of_service": "",
+      "cpt_hcpcs": "90812",
+      "modifier": "",
+      "diagnosis_code": "",
+      "charges": "93.00",
+      "days_or_units": "",
+      "epsdt_family_plan": "",
+      "emg": "",
+      "cob": "",
+      "reserved_for_local_use": "1234567890"
+    }
+  ],
+  "25_federal_tax_id_number": "555-88-9999",
+  "25_ssn_ein": "EIN",
+  "26_patients_account_no": "",
+  "27_accept_assignment": "YES",
+  "28_total_charge": "405.00",
+  "29_amount_paid": "",
+  "30_balance_due": "",
+  "31_physician_signature": {
+    "signed": "MtJackson",
+    "date": "10/11/21"
+  },
+  "32_facility_name_and_address": "Mateo Jackson PhD\n9876 Healthcare Ave\nAny Town, CA 92126",
+  "33_physician_billing_info": {
+    "name_address": "Mateo Jackson PhD\n9876 Healthcare Ave\nAny Town, CA 92126",
+    "phone": "(920) 555-0101",
+    "pin": "",
+    "grp": ""
+  }
+}

@@ -39,7 +39,7 @@ class TextractEngine(OCREngine):
         """
         options = options or {}
         output_schema = options.get('output_schema')
-        s3_bucket = options.get('s3_bucket', 'ocr-with-ai-services-demo-bucket')
+        s3_bucket = options.get('s3_bucket', 'ocr-demo-403202188152')
         logger.info(f"Using S3 bucket: {s3_bucket}")
         
         overall_start_time = time.time()

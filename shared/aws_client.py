@@ -1,22 +1,18 @@
 import boto3
+from botocore.config import Config
 import logging
 from functools import lru_cache
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Long timeout for reasoning/thinking models (up to 60 min per AWS Nova docs)
+_BEDROCK_CONFIG = Config(read_timeout=3600, connect_timeout=60, retries={"max_attempts": 2})
+
 @lru_cache(maxsize=16)
 def get_aws_client(service_name, region=None, endpoint_url=None):
     """
     Get a cached boto3 client to avoid creating new connections
-    
-    Args:
-        service_name: AWS service name
-        region: AWS region name
-        endpoint_url: Optional custom endpoint URL
-        
-    Returns:
-        Boto3 client for the requested service
     """
     logger.debug(f"Getting AWS client for {service_name} in region {region}")
     kwargs = {}
@@ -24,6 +20,8 @@ def get_aws_client(service_name, region=None, endpoint_url=None):
         kwargs['region_name'] = region
     if endpoint_url:
         kwargs['endpoint_url'] = endpoint_url
+    if service_name in ('bedrock-runtime', 'bedrock'):
+        kwargs['config'] = _BEDROCK_CONFIG
         
     return boto3.client(service_name, **kwargs)
 
