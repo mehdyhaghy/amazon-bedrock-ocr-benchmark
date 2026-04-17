@@ -28,7 +28,7 @@ POSTPROCESSING_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 # - "budget": Claude Sonnet 4 / Haiku 4.5 — uses thinking.type="enabled" + budget_tokens via invoke_model
 # - "nova": Nova 2 Lite — uses reasoningConfig via converse additionalModelRequestFields
 EFFORT_LEVELS = {
-    "us.anthropic.claude-opus-4-7": ("adaptive", ["low", "medium", "high", "max"]),
+    "us.anthropic.claude-opus-4-7": ("adaptive", ["low", "medium", "high"]),
     "us.anthropic.claude-sonnet-4-6": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": ("budget", [1024, 4096, 16384]),
     "us.amazon.nova-2-lite-v1:0": ("nova", ["low", "medium"]),
