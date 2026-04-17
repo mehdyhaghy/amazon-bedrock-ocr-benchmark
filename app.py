@@ -89,6 +89,7 @@ def create_ocr_app():
         
         # Insert global status at the beginning of output components
         output_components.insert(0, global_status)
+        input_components["global_status"] = global_status
         
         # Setup event handlers
         setup_event_handlers(
