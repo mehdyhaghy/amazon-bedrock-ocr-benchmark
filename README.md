@@ -114,7 +114,7 @@ uv pip install -r requirements.txt
 Update the default S3 bucket name in `ui.py` (or type your own in the UI at runtime):
 - **S3 Bucket for Processing** — default `ocr-demo-403202188152` (used by Textract on PDFs and by BDA)
 
-The `bedrock-runtime` client is configured with `read_timeout=3600` to support long-running adaptive-thinking variants.
+The `bedrock-runtime` client is configured with `read_timeout=120` (2 minutes) and `max_attempts=0` (no retries) so slow/stuck models fail fast and are surfaced as errors in the results grid instead of blocking the whole run.
 
 ## Usage
 
@@ -140,7 +140,7 @@ Open http://localhost:7860. By default **Use Bedrock** and **Use BDA** are check
 │   └── bda_engine.py
 ├── shared/
 │   ├── config.py               # BEDROCK_MODELS, EFFORT_LEVELS, API_COSTS
-│   ├── aws_client.py           # 1-hour read_timeout bedrock-runtime client
+│   ├── aws_client.py           # bedrock-runtime client (2-min read_timeout, no retries)
 │   ├── prompt_manager.py       # Strict JSON-only prompt instructions
 │   ├── evaluator.py            # Recursive field-level accuracy
 │   └── comparison_utils.py     # Diff-view HTML renderer

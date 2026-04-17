@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "properties": {
+    "merchant": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "address": {"type": "string"},
+        "city": {"type": "string"},
+        "state": {"type": "string"},
+        "zip": {"type": "string"},
+        "phone": {"type": "string"}
+      }
+    },
+    "register": {
+      "type": "object",
+      "properties": {
+        "reg_number": {"type": "string"},
+        "transaction_number": {"type": "string"},
+        "cashier_number": {"type": "string"},
+        "store_number": {"type": "string"},
+        "cashier_name": {"type": "string"}
+      }
+    },
+    "extracare_card": {"type": "string"},
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "quantity": {"type": "integer"},
+          "description": {"type": "string"},
+          "price": {"type": "number"},
+          "taxable": {"type": "boolean"}
+        }
+      }
+    },
+    "item_count": {"type": "integer"},
+    "survey_id": {"type": "string"},
+    "subtotal": {"type": "number"},
+    "tax_rate": {"type": "string"},
+    "tax": {"type": "number"},
+    "total": {"type": "number"},
+    "payment_method": {"type": "string"},
+    "payment_amount": {"type": "number"}
+  }
+}
