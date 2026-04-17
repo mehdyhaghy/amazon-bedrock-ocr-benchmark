@@ -50,10 +50,11 @@ If the model returns a JSON schema shape (`{"type":"object","properties":{...}}`
 
 ## Sample data
 
-11 document samples ship in `sample/`:
+12 document samples ship in `sample/`:
 
 | Sample | Schema | Truth |
 |---|---|---|
+| cvs_reciept.jpg | ❌ | ❌ |
 | driver_license.png | ✅ | ✅ |
 | graphic.jpg | ✅ | ✅ |
 | handwriting.jpg | ✅ | ✅ |
@@ -92,6 +93,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Or with [`uv`](https://github.com/astral-sh/uv):
+
+```bash
+uv venv
+uv pip install -r requirements.txt
+```
+
 ### Pinned dependencies (April 2026)
 
 - `gradio==6.12.0`
@@ -103,9 +111,8 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Update the default S3 bucket names in `ui.py` (or type your own in the UI at runtime):
-- **S3 Bucket for Processing** — default `ocr-demo-REDACTED`
-- **S3 Bucket for BDA Processing** — default `bda-demo-REDACTED`
+Update the default S3 bucket name in `ui.py` (or type your own in the UI at runtime):
+- **S3 Bucket for Processing** — default `ocr-demo-REDACTED` (used by Textract on PDFs and by BDA)
 
 The `bedrock-runtime` client is configured with `read_timeout=3600` to support long-running adaptive-thinking variants.
 

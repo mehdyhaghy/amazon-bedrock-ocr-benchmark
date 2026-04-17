@@ -119,17 +119,11 @@ def create_common_options_panel():
                 label="S3 Bucket for Processing",
                 value="ocr-demo-REDACTED",
                 placeholder="Enter your S3 bucket name",
-                info="S3 bucket for uploading files for processing (required for all engines)",
+                info="S3 bucket for uploading files for processing (required for all engines, including BDA)",
                 scale=2
             )
-            
-            bda_s3_bucket = gr.Textbox(
-                label="S3 Bucket for BDA Processing",
-                value="bda-demo-REDACTED",
-                placeholder="Enter your S3 bucket name for BDA",
-                info="S3 bucket specifically for BDA processing",
-                scale=2
-            )
+
+        bda_s3_bucket = s3_bucket  # same bucket used for BDA
         
         # Bedrock Configuration Section
         gr.Markdown("### 🤖 Bedrock Configuration")
