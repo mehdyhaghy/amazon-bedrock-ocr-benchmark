@@ -13,7 +13,6 @@ def create_input_panel():
                 info="Select a sample image or upload your own",
                 scale=4
             )
-            refresh_samples = gr.Button("Refresh", scale=1)
             
         with gr.Row():
             # Left column for file upload
@@ -50,28 +49,28 @@ def create_input_panel():
                 
                 # Process buttons moved here, right under preview
                 gr.Markdown("---")
-                with gr.Row():
-                    process_file_button = gr.Button("🚀 Process File", variant="primary", scale=2)
-                    process_all_button = gr.Button("📁 Process All Samples", variant="secondary", scale=1)
+                process_file_button = gr.Button("🚀 Process File", variant="primary")
+                process_all_button = gr.Button("", visible=False)  # Removed from UI
                 
                 # Hidden state for PDF navigation
                 current_page = gr.State(0)
                 total_pages = gr.State(1)
                 current_pdf_path = gr.State(None)
     
-    return (panel, sample_dropdown, input_image, refresh_samples, image_preview, pdf_preview, 
+    return (panel, sample_dropdown, input_image, None, image_preview, pdf_preview, 
             pdf_controls, prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path,
             process_file_button, process_all_button)
 
 def create_results_table():
     """Create a table to display comparative performance metrics with dark mode support"""
+    # Pre-fill with 5 blank rows so the grid reserves space visually on load
     results_df = pd.DataFrame({
-        "Engine": [],
-        "Samples Processed": [],
-        "Avg. Processing Time (s)": [],
-        "Avg. Cost ($)": [],
-        "Total Cost ($)": [],
-        "Accuracy (%)" : []
+        "Engine": [""] * 5,
+        "Tokens (in/out)": [""] * 5,
+        "Avg. Processing Time (s)": [""] * 5,
+        "Avg. Cost ($)": [""] * 5,
+        "Total Cost ($)": [""] * 5,
+        "Accuracy (%)": [""] * 5,
     })
     
     results_table = gr.Dataframe(
@@ -79,8 +78,9 @@ def create_results_table():
         label="Comparison Results",
         interactive=False,
         wrap=True,
+        row_count=(20, "fixed"),
         max_height=500,
-        column_widths=["200px", "130px", "150px", "110px", "110px", "110px"],
+        column_widths=["200px", "140px", "150px", "130px", "130px", "110px"],
         elem_id="results-dataframe",
         elem_classes="results-dataframe"
     )
@@ -135,20 +135,13 @@ def create_common_options_panel():
         gr.Markdown("### 🤖 Bedrock Configuration")
         
         with gr.Row():
-            bedrock_model = gr.Dropdown(
-                choices=list(BEDROCK_MODELS.keys()),
-                value="Claude Sonnet 4.6",
-                label="Bedrock Model",
-                info="Select an Amazon Bedrock model for processing",
-                scale=2
-            )
-            
             use_bda_blueprint = gr.Checkbox(
                 label="Use Custom Blueprint (BDA)",
                 value=False,
                 info="When enabled, creates a custom blueprint based on the output schema. When disabled, uses default extraction with Claude Haiku post-processing.",
                 scale=1
             )
+        bedrock_model = gr.State("")  # Unused — benchmark mode runs all models
         
         # Output Schema Section
         gr.Markdown("### 📋 Output Schema Configuration")
@@ -166,40 +159,37 @@ def create_results_panel():
     """Create the results panel with tabs for each engine"""
     with gr.Column() as panel:
         with gr.Tabs() as tabs:
-            with gr.TabItem("Textract"):
-                textract_status = gr.HTML("<div></div>", label="Status")
-                textract_extracted_text = gr.Textbox(label="Extracted Text", lines=10, interactive=False)
-                textract_json = gr.JSON(label="Raw JSON Output")
-                textract_image = gr.Image(label="Visualization", interactive=False)
-            
-            with gr.TabItem("Bedrock"):
-                bedrock_status = gr.HTML("<div></div>", label="Status")
-                bedrock_json = gr.JSON(label="Raw JSON Output")
-                bedrock_extracted_text = gr.Textbox(label="Extracted Text", lines=10, interactive=False)
-                bedrock_image = gr.Image(label="Visualization", interactive=False)
-                
-                bedrock_cost = gr.HTML("<div></div>", label="API Cost")
-                bedrock_token_usage = gr.JSON(label="Token Usage", visible=False)
-            
-            with gr.TabItem("BDA"):
-                bda_status = gr.HTML("<div></div>", label="Status")
-                bda_extracted_text = gr.Textbox(label="Extracted Text", lines=10, interactive=False)
-                bda_json = gr.JSON(label="Raw JSON Output")
-                bda_image = gr.Image(label="Visualization", interactive=False)
+            with gr.TabItem("Response"):
+                gr.Markdown("Click a row in the **Comparison Results** table above to view its response.")
+                response_json = gr.JSON(label="Raw JSON Output")
+                response_text = gr.Textbox(visible=False)
+                response_image = gr.Image(visible=False)
+                response_cost = gr.HTML("<div></div>")
             
             with gr.TabItem("Truth"):
-                truth_status = gr.HTML("<div></div>", label="Status")
+                truth_status = gr.HTML("<div></div>", label="Status", visible=False)
                 truth_json = gr.JSON(label="Ground Truth Data")
             
             with gr.TabItem("Compare"):
-                diff_engine = gr.Dropdown(
-                    choices=[],
-                    label="Select engine to compare with ground truth",
-                    value=None,
-                    allow_custom_value=False,
-                    interactive=True
-                )
-                comparison_view = gr.HTML("<div>Select an engine and process an image to see comparison</div>")
+                comparison_view = gr.HTML("<div>Click a row in the Comparison Results table to see its diff against ground truth</div>")
+    
+    # Hidden placeholders for backward-compatible output_components ordering.
+    # Per-engine streaming writes go here; the visible Response tab is populated
+    # separately from the row-click handler in app.py.
+    textract_status = gr.HTML(visible=False)
+    textract_extracted_text = gr.Textbox(visible=False)
+    textract_json = gr.JSON(visible=False)
+    textract_image = gr.Image(visible=False)
+    bedrock_status = gr.HTML(visible=False)
+    bedrock_extracted_text = gr.Textbox(visible=False)
+    bedrock_json = gr.JSON(visible=False)
+    bedrock_image = gr.Image(visible=False)
+    bedrock_cost = gr.HTML(visible=False)
+    bedrock_token_usage = gr.JSON(visible=False)
+    bda_status = gr.HTML(visible=False)
+    bda_extracted_text = gr.Textbox(visible=False)
+    bda_json = gr.JSON(visible=False)
+    bda_image = gr.Image(visible=False)
     
     # Organize components for easier access
     input_components = {
@@ -219,8 +209,11 @@ def create_results_panel():
         "bda_image": bda_image,
         "truth_status": truth_status,
         "truth_json": truth_json,
-        "diff_engine": diff_engine,
-        "comparison_view": comparison_view
+        "comparison_view": comparison_view,
+        "response_json": response_json,
+        "response_text": response_text,
+        "response_image": response_image,
+        "response_cost": response_cost
     }
     
     output_components = [
@@ -229,7 +222,7 @@ def create_results_panel():
         bedrock_cost, bedrock_token_usage,
         bda_status, bda_extracted_text, bda_json, bda_image,
         truth_status, truth_json,
-        diff_engine, comparison_view
+        comparison_view
     ]
     
     return panel, input_components, output_components

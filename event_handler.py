@@ -28,7 +28,6 @@ def setup_event_handlers(
     truth_json = input_components.get("truth_json")
     
     # Get comparison components
-    diff_engine = input_components.get("diff_engine")
     comparison_view = input_components.get("comparison_view")
     
     # Get JSON outputs for comparison
@@ -56,7 +55,8 @@ def setup_event_handlers(
                 image_preview, pdf_preview]
     )
     
-    refresh_samples.click(
+    # Auto-refresh sample dropdown when the user opens it (picks up newly added images)
+    sample_dropdown.focus(
         fn=lambda: gr.Dropdown(choices=list_sample_images()),
         outputs=sample_dropdown
     )
@@ -111,6 +111,27 @@ def setup_event_handlers(
             current_sample_name  # Pass the current sample name
         ],
         outputs=output_components + [results_table, results_json_state]
+    ).then(
+        # Nudge the DataFrame to render its scrollbar after streaming completes
+        fn=None,
+        js="""() => {
+            const el = document.getElementById('results-dataframe');
+            if (!el) return;
+            window.dispatchEvent(new Event('resize'));
+            // Scroll the inner wrapper by 1px then back — forces virtual scroller to recompute
+            const wrap = el.querySelector('.table-wrap') || el.querySelector('[class*="table"]');
+            if (wrap) {
+                wrap.scrollTop = 1;
+                setTimeout(() => { wrap.scrollTop = 0; }, 50);
+            }
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 200);
+        }"""
+    )
+    
+    # Nudge the DataFrame scroller on every row update (streaming yields)
+    results_table.change(
+        fn=None,
+        js="() => { window.dispatchEvent(new Event('resize')); }"
     )
     
     # Process all samples
@@ -124,30 +145,7 @@ def setup_event_handlers(
         outputs=[global_status, results_table]
     )
     
-    # Add event handler for comparison view updates — pulls from per-variant JSON map
-    def _diff_handler(engine, truth, results_map):
-        if not engine or not truth:
-            return "<div>Select an engine to compare against ground truth</div>"
-        extracted = (results_map or {}).get(engine)
-        if extracted is None:
-            return f"<div>No JSON output available for {engine}</div>"
-        return create_diff_view(truth, extracted)
-    
-    if results_json_state is not None:
-        diff_engine.change(
-            fn=_diff_handler,
-            inputs=[diff_engine, truth_json, results_json_state],
-            outputs=comparison_view
-        )
-        # When new results arrive, refresh the dropdown choices to include all engine variants
-        results_json_state.change(
-            fn=lambda results_map: gr.update(
-                choices=list(results_map.keys()) if results_map else [],
-                value=(list(results_map.keys())[0] if results_map else None)
-            ),
-            inputs=[results_json_state],
-            outputs=[diff_engine]
-        )
+    # Comparison view is updated from the Comparison Results row-click event in app.py
     
     logger.info("Event handlers setup completed")
     

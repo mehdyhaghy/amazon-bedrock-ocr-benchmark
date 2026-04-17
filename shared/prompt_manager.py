@@ -71,7 +71,10 @@ Follow these guidelines:
    - Organize content into a logical hierarchy
    - Include metadata such as dates, reference numbers, etc.
 
-IMPORTANT: Return ONLY the JSON data without any markdown code blocks, backticks or formatting. Ensure the output is valid JSON.
+IMPORTANT: Return ONLY a single valid JSON object. No markdown, no backticks, no prose before or after.
+- All string values must be on one line — escape newlines as \\n, tabs as \\t.
+- Escape double quotes inside strings as \\".
+- No trailing commas before } or ].
 """
 
 def get_json_formatting_instructions(output_schema=None):
@@ -85,7 +88,16 @@ def get_json_formatting_instructions(output_schema=None):
         str: The appropriate JSON formatting instructions
     """
     if output_schema:
-        return f"\n\nPlease format the output according to this JSON schema: {output_schema}\nIMPORTANT: Return ONLY the JSON data without any markdown code blocks, backticks or formatting. Ensure all quotes and special characters are properly escaped."
+        return (
+            f"\n\nFormat the output according to this JSON schema: {output_schema}\n"
+            "CRITICAL REQUIREMENTS:\n"
+            "- Return ONLY a single valid JSON object. No markdown, no backticks, no prose before or after.\n"
+            "- Use the EXACT field names from the schema above.\n"
+            "- All string values must be on a single line — escape newlines as \\\\n, tabs as \\\\t.\n"
+            "- Escape all double quotes inside strings as \\\\\".\n"
+            "- No trailing commas before } or ].\n"
+            "- Do not wrap values in {\"type\":..., \"value\":...} — put the plain value directly."
+        )
     else:
         return "\n\n" + JSON_TEMPLATE_NO_SCHEMA
 

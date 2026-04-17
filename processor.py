@@ -159,12 +159,15 @@ def create_results_dataframe(engine_results):
     final_results = []
     
     for engine_name, data in engine_results.items():
+        token_usage = data.get("token_usage") or {}
+        in_tok = token_usage.get("inputTokens", 0)
+        out_tok = token_usage.get("outputTokens", 0)
         result_row = {
             "Engine": engine_name,
-            "Samples Processed": 1,
+            "Tokens (in/out)": f"{in_tok}/{out_tok}",
             "Avg. Processing Time (s)": f"{data['time']:.3f}",
-            "Avg. Cost ($)": f"{data['cost']:.2e}" if 0 < data['cost'] < 0.00001 else round(data['cost'], 6),
-            "Total Cost ($)": f"{data['cost']:.2e}" if 0 < data['cost'] < 0.00001 else round(data['cost'], 6),
+            "Avg. Cost ($)": f"${data['cost']:.8f}",
+            "Total Cost ($)": f"${data['cost']:.8f}",
             "Accuracy (%)": data["accuracy"]
         }
         final_results.append(result_row)
@@ -207,7 +210,7 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
     # Empty results for error cases
     empty_df = pd.DataFrame({
         "Engine": [],
-        "Samples Processed": [],
+        "Tokens (in/out)": [],
         "Avg. Processing Time (s)": [],
         "Avg. Cost ($)": [],
         "Total Cost ($)": [],
@@ -255,7 +258,6 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         "BDA": STATUS_HTML["processing"]("BDA") if use_bda else "<div></div>"
     }
 
-    diff_engine_value = "Bedrock"  # Default engine for comparison
     # Initial UI update
     yield [
         global_status_html,
@@ -280,7 +282,6 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         truth_status_html, 
         truth_data,
         
-        diff_engine_value, 
         "<div>Processing results... comparison will be available when completed</div>",
         
         empty_df,
@@ -370,11 +371,9 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                 # Create comparison view with available results
                 comparison_html = create_comparison_view_for_engines(truth_data, truth_exists, engine_results)
                 
-                # Create results table
-                results_df = create_results_dataframe({
-                    name: data for name, data in engine_results.items() 
-                    if name in futures.keys()  # Only include selected engines
-                })
+                # During streaming, keep the grid empty to avoid mid-process rendering issues.
+                # The final DataFrame is populated only on completion (see bottom of function).
+                results_df = empty_df
                 
                 # Calculate global status — show partial progress while runs are in flight
                 total_time = time.time() - total_start
@@ -387,8 +386,7 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     global_status_html = STATUS_HTML["global_completed"](total_time, total_cost)
                 
                 # Build JSON map for row-click display (engine_name -> json data)
-                json_map = {name: data.get("json") for name, data in engine_results.items()
-                            if name in futures.keys() and data.get("json") is not None}
+                json_map = {}
                 
                 # Update UI
                 yield [
@@ -414,7 +412,6 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     truth_status_html, 
                     truth_data,
                     
-                    diff_engine_value, 
                     comparison_html,
                     
                     results_df,
@@ -430,11 +427,8 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                 # Create comparison with available results
                 comparison_html = create_comparison_view_for_engines(truth_data, truth_exists, engine_results)
                 
-                # Create results table
-                results_df = create_results_dataframe({
-                    name: data for name, data in engine_results.items() 
-                    if name in futures.keys() and "time" in data  # Only include successful engines
-                })
+                # Keep grid empty during streaming
+                results_df = empty_df
                 
                 # Calculate global status
                 total_time = time.time() - total_start
@@ -447,8 +441,7 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     global_status_html = STATUS_HTML["global_completed"](total_time, total_cost)
                 
                 # Build JSON map for row-click display
-                json_map = {name: data.get("json") for name, data in engine_results.items()
-                            if name in futures.keys() and data.get("json") is not None}
+                json_map = {}
                 
                 # Update UI
                 yield [
@@ -474,7 +467,6 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     truth_status_html, 
                     truth_data,
                     
-                    diff_engine_value, 
                     comparison_html,
                     
                     results_df,
@@ -490,17 +482,34 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         if name in futures.keys()  # Only include selected engines
     })
     
+    # Sort by processing time ascending (final results only)
+    if not results_df.empty and "Avg. Processing Time (s)" in results_df.columns:
+        results_df = results_df.sort_values(
+            by="Avg. Processing Time (s)",
+            key=lambda c: c.astype(float),
+            ascending=True
+        ).reset_index(drop=True)
+    
+    # Build final JSON map in the same order as the sorted DataFrame so that
+    # row-click index lookups resolve to the correct engine variant.
+    ordered_names = results_df["Engine"].tolist() if not results_df.empty else []
+    final_json_map = {
+        name: {
+            "json": engine_results[name].get("json"),
+            "text": engine_results[name].get("text", ""),
+            "image": engine_results[name].get("image"),
+            "cost_html": engine_results[name].get("cost_html", "<div></div>"),
+        }
+        for name in ordered_names if name in engine_results
+    }
+    
     # Final status
     total_time = time.time() - total_start
     total_cost = sum(data["cost"] for name, data in engine_results.items() if name in futures.keys())
     global_status_html = STATUS_HTML["global_completed"](total_time, total_cost)
     
-    # Build final JSON map
-    final_json_map = {name: data.get("json") for name, data in engine_results.items()
-                      if name in futures.keys() and data.get("json") is not None}
-    
     # Return final UI update
-    return [
+    final_output = [
         global_status_html,
         engine_status.get("Textract", "<div></div>"), 
         engine_results.get("Textract", {}).get("text", ""), 
@@ -523,9 +532,9 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         truth_status_html, 
         truth_data,
         
-        diff_engine_value, 
         comparison_html,
         
         results_df,
         final_json_map
     ]
+    yield final_output

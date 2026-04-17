@@ -12,12 +12,8 @@ MAX_IMAGE_SIZE = 5 * 1024 * 1024 - 100000  # 5MB minus buffer for Bedrock
 BEDROCK_MODELS = {
     "Claude Opus 4.7": "us.anthropic.claude-opus-4-7",
     "Claude Sonnet 4.6": "us.anthropic.claude-sonnet-4-6",
-    "Claude Sonnet 4": "us.anthropic.claude-sonnet-4-20250514-v1:0",
     "Claude Haiku 4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "Amazon Nova 2 Lite": "us.amazon.nova-2-lite-v1:0",
-    "Ministral 3B": "mistral.ministral-3-3b-instruct",
-    "Ministral 8B": "mistral.ministral-3-8b-instruct",
-    "Ministral 14B": "mistral.ministral-3-14b-instruct",
     "Pixtral Large": "us.mistral.pixtral-large-2502-v1:0",
     "Mistral Large 3": "mistral.mistral-large-3-675b-instruct",
     "Llama 4 Maverick 17B": "us.meta.llama4-maverick-17b-instruct-v1:0",
@@ -34,7 +30,6 @@ POSTPROCESSING_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 EFFORT_LEVELS = {
     "us.anthropic.claude-opus-4-7": ("adaptive", ["low", "medium", "high", "max"]),
     "us.anthropic.claude-sonnet-4-6": ("adaptive", ["low", "medium"]),
-    "us.anthropic.claude-sonnet-4-20250514-v1:0": ("budget", [1024, 4096, 16384]),
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": ("budget", [1024, 4096, 16384]),
     "us.amazon.nova-2-lite-v1:0": ("nova", ["low", "medium"]),
 }
@@ -55,10 +50,6 @@ API_COSTS = {
             'input': 0.003 / 1000,   # $3.00 per 1M input tokens
             'output': 0.015 / 1000   # $15.00 per 1M output tokens
         },
-        'us.anthropic.claude-sonnet-4-20250514-v1:0': {
-            'input': 0.003 / 1000,   # $3.00 per 1M input tokens
-            'output': 0.015 / 1000   # $15.00 per 1M output tokens
-        },
         'us.anthropic.claude-haiku-4-5-20251001-v1:0': {
             'input': 0.001 / 1000,   # $1.00 per 1M input tokens
             'output': 0.005 / 1000   # $5.00 per 1M output tokens
@@ -68,19 +59,7 @@ API_COSTS = {
             'input': 0.00008 / 1000,  # $0.08 per 1M input tokens
             'output': 0.00032 / 1000  # $0.32 per 1M output tokens
         },
-        # Ministral models
-        'mistral.ministral-3-3b-instruct': {
-            'input': 0.00004 / 1000,  # $0.04 per 1M input tokens
-            'output': 0.00004 / 1000  # $0.04 per 1M output tokens
-        },
-        'mistral.ministral-3-8b-instruct': {
-            'input': 0.00018 / 1000,  # $0.18 per 1M input tokens
-            'output': 0.00018 / 1000  # $0.18 per 1M output tokens
-        },
-        'mistral.ministral-3-14b-instruct': {
-            'input': 0.00024 / 1000,  # $0.24 per 1M input tokens
-            'output': 0.00024 / 1000  # $0.24 per 1M output tokens
-        },
+        # Mistral models
         'us.mistral.pixtral-large-2502-v1:0': {
             'input': 0.002 / 1000,    # $2.00 per 1M input tokens
             'output': 0.006 / 1000    # $6.00 per 1M output tokens
@@ -125,7 +104,7 @@ STATUS_HTML = {
     "global_processing": lambda: """<div style='padding: 10px; background-color: #3b5998; color: white; 
                                     border-radius: 5px; font-weight: bold;'>Processing with selected engines...</div>""",
     "global_completed": lambda time, cost: f"""<div style='padding: 10px; background-color: #2e7d32; color: white; 
-                                        border-radius: 5px; font-weight: bold;'>All processing completed in {time:.3f} seconds (Total est. cost: ${cost:.6f})</div>""",
+                                        border-radius: 5px; font-weight: bold; position: relative;'>All processing completed in {time:.3f} seconds (Total est. cost: ${cost:.6f})<span onclick="this.parentElement.style.display='none'" style="position:absolute; top:6px; right:10px; cursor:pointer; font-size:18px; line-height:1;">×</span></div>""",
     "global_partial": lambda success, total, time, cost: f"""<div style='padding: 10px; background-color: #ed6c02; color: white; 
                                                      border-radius: 5px; font-weight: bold;'>{success}/{total} engines completed in {time:.3f} seconds (Total est. cost: ${cost:.6f})</div>"""
 }

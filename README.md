@@ -1,90 +1,113 @@
-# OCR with AWS AI Services
+# Amazon Bedrock OCR Benchmark
 
-A multi-engine OCR benchmark tool for comparing **Amazon Textract**, **Amazon Bedrock** (12 models), and **Amazon Bedrock Data Automation (BDA)** on the same documents — side by side — with latency, cost, and accuracy metrics.
-
-## Overview
-
-This application provides a unified interface for extracting text and structured data from images using three AWS AI services:
-
-1. **Amazon Textract** — AWS's dedicated OCR service. After text extraction, an LLM structures the output into JSON matching the provided schema.
-2. **Amazon Bedrock** — Foundation models for end-to-end vision + JSON structuring in a single call. The app benchmarks **all configured Bedrock models in parallel**, and for models that support reasoning it runs each at multiple effort levels as separate rows.
-3. **Amazon Bedrock Data Automation (BDA)** — AWS's document analysis service with two modes:
-   - **Custom Blueprint** — creates a custom blueprint from the JSON schema
-   - **LLM Post-processing** (default) — standard BDA extraction followed by Bedrock LLM structuring
+A side-by-side benchmarking tool that runs the same document through **Amazon Textract**, **Amazon Bedrock Data Automation (BDA)**, and **8 Amazon Bedrock foundation models** (with every available reasoning-effort variant) — all in parallel — and reports latency, cost, and accuracy vs ground truth.
 
 <img src="asset/sample-ui.png" width="900" alt="UI">
 
-## Supported Bedrock Models
+## How it works
 
-All models run through the Bedrock **Converse API** with `additionalModelRequestFields` for provider-specific reasoning parameters.
+Enabling **Use Bedrock** automatically runs **all 8 configured models**. Models that support reasoning get expanded into one standalone call per effort level, each appearing as its own row in the results table.
 
-| Model | Provider | Vision | Reasoning / Effort levels |
+| Model | Provider | Reasoning mode | Variants |
 |---|---|---|---|
-| Claude Opus 4.7 | Anthropic | ✅ | adaptive: off, low, medium, high, max |
-| Claude Sonnet 4.6 | Anthropic | ✅ | adaptive: off, low, medium |
-| Claude Sonnet 4 | Anthropic | ✅ | budget_tokens: off, 1024, 4096, 16384 |
-| Claude Haiku 4.5 | Anthropic | ✅ | budget_tokens: off, 1024, 4096, 16384 |
-| Amazon Nova 2 Lite | Amazon | ✅ | reasoningConfig: off, low, medium |
-| Ministral 3B | Mistral | ✅ | — |
-| Ministral 8B | Mistral | ✅ | — |
-| Ministral 14B | Mistral | ✅ | — |
-| Pixtral Large | Mistral | ✅ | — |
-| Mistral Large 3 | Mistral | ✅ | — |
-| Llama 4 Maverick 17B | Meta | ✅ | — |
-| Llama 4 Scout 17B | Meta | ✅ | — |
+| Claude Opus 4.7 | Anthropic | adaptive thinking | off, low, medium, high, max |
+| Claude Sonnet 4.6 | Anthropic | adaptive thinking | off, low, medium |
+| Claude Haiku 4.5 | Anthropic | budget_tokens | off, 1024, 4096, 16384 |
+| Amazon Nova 2 Lite | Amazon | reasoningConfig | off, low, medium |
+| Pixtral Large | Mistral | — | 1 |
+| Mistral Large 3 | Mistral | — | 1 |
+| Llama 4 Maverick 17B | Meta | — | 1 |
+| Llama 4 Scout 17B | Meta | — | 1 |
 
-Enabling Bedrock runs **26 parallel configurations** per image (12 models × applicable effort levels).
+**Total Bedrock variants per image: 19** (12 thinking configurations + 4 non-thinking models + 3 baselines).
 
-## Key Features
+All Bedrock calls go through the **Converse API** uniformly for both images and PDFs. Reasoning parameters are passed via `additionalModelRequestFields`:
 
-- **Benchmark mode** — All 12 Bedrock models run in parallel, with reasoning-capable models expanded into separate runs per effort level
-- **Row-click drill-down** — Click any row in the Comparison Results table to load that variant's raw JSON response in the Bedrock tab
-- **Dynamic Compare dropdown** — The Compare tab's engine picker is populated with every engine variant that produced output, so you can diff any model against ground truth
-- **Live progress indicator** — The global status shows `N/M engines completed...` while runs are in flight, switching to a "completed" banner only when all 27+ variants finish
-- **Unified Converse API** — Images and PDFs processed through the same API across all providers
-- **Accuracy evaluation** — Extracted JSON compared against per-sample ground truth with field-level matching; robust to schema echoes and JSON wrapped in extra text
-- **Cost calculation** — Real-time cost estimation per variant (small values shown in scientific notation)
-- **Effort level comparison** — For reasoning-capable models, see how `off` vs `low`/`medium`/`high`/`max` affects latency, cost, and accuracy
-- **Generic schema fallback** — Samples without a specific schema automatically use a generic `{"type": "object"}` template
-- **Thinking block filtering** — Reasoning/thinking content blocks are automatically excluded from extracted text
-- **Long-latency safe** — 1-hour read timeout on Bedrock clients for deep reasoning runs
+- **Claude adaptive** → `{"thinking": {"type": "adaptive"}, "output_config": {"effort": "..."}}`
+- **Claude budget** → `{"thinking": {"type": "enabled", "budget_tokens": N}}`
+- **Nova** → `{"inferenceConfig": {"reasoningConfig": {"type": "enabled", "maxReasoningEffort": "..."}}}`
+
+## UI Layout
+
+- **Comparison Results** grid — one row per engine/variant. Populated in one shot when all variants finish, then sorted by processing time ascending. Click any row to:
+  - Load its raw JSON in the **Response** tab
+  - Load its field-by-field diff against ground truth in the **Compare** tab (heading shows the selected engine name)
+- **Truth** tab — shows the loaded ground-truth JSON
+- **Response** tab — raw JSON output + API cost (updates from row clicks)
+- **Compare** tab — field-by-field diff (updates from row clicks, no dropdown)
+
+The global status bar shows live progress: `N/M engines completed in X seconds (est. cost: $Y)`, switching to a dismissable green "All processing completed" banner when all variants finish. Columns: **Engine**, **Tokens (in/out)**, **Avg. Processing Time (s)**, **Avg. Cost ($)**, **Total Cost ($)**, **Accuracy (%)**.
+
+## Robust JSON parsing
+
+Models sometimes emit slightly-invalid JSON. The parser tries the following in order:
+1. Direct `json.loads`
+2. Slice from first `{` to last `}` with smart-char fixes (BOMs, Chinese colons `：`, smart quotes)
+3. Remove trailing commas (`,}` → `}`)
+4. Escape stray control chars (literal `\n`, `\t`, `\r` inside string values)
+
+If the model returns a JSON schema shape (`{"type":"object","properties":{...}}`) instead of filled values, the engine unwraps `properties` automatically. If fields come wrapped as `{"type":"string","value":"..."}` (common with Llama 4), those are unwrapped too. Thinking / `reasoningContent` blocks in the response are stripped before JSON parsing.
+
+## Sample data
+
+11 document samples ship in `sample/`:
+
+| Sample | Schema | Truth |
+|---|---|---|
+| driver_license.png | ✅ | ✅ |
+| graphic.jpg | ✅ | ✅ |
+| handwriting.jpg | ✅ | ✅ |
+| handwriting2.jpg | ✅ | ✅ |
+| insurance_card.png | ✅ | ✅ |
+| insurance_claim.png | ✅ | ✅ |
+| nutrition.jpg | ✅ | ✅ |
+| provider_notes.png | ✅ | ✅ |
+| reverse_sheet.png | ✅ | ✅ |
+| schedule_table.png | ✅ | ✅ |
+| sheet.jpg | ✅ | ✅ |
+
+If an image has no matching schema file, a generic `{"type": "object"}` template is used instead. Accuracy scoring uses a recursive field-level comparison against the truth JSON.
+
+### Add your own samples
+
+1. Drop images in `sample/images/` — the dropdown auto-refreshes on focus
+2. (Optional) Add `sample/schema/<basename>.json` for stronger schema guidance
+3. (Optional) Add `sample/truth/<basename>.json` for accuracy scoring
 
 ## Requirements
 
 - Python 3.10+
-- AWS account with Bedrock, Textract, and BDA access
-- Bedrock **model access** granted for the 12 models listed above in your region
 - AWS credentials configured locally
-- Two S3 buckets (one for Textract/general processing, one for BDA)
+- Bedrock model access granted (via the Bedrock console) for all 8 models above in your region
+- S3 bucket (optional — only required for BDA processing, and for Textract on PDFs)
 
 ## Installation
 
 ```bash
-git clone https://github.com/aws-samples/ocr-with-aws-ai-services.git
-cd ocr-with-aws-ai-services
+git clone https://github.com/mehdyhaghy/amazon-bedrock-ocr-benchmark.git
+cd amazon-bedrock-ocr-benchmark
 
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Dependencies (pinned to latest stable as of April 2026):
-- gradio 6.12.0
-- boto3 1.42.90
-- Pillow 12.2.0
-- numpy 2.4.4
-- pandas 3.0.2
-- pymupdf 1.27.2.2
+### Pinned dependencies (April 2026)
 
-## Configure AWS
+- `gradio==6.12.0`
+- `boto3==1.42.90`
+- `Pillow==12.2.0`
+- `numpy==2.4.4`
+- `pandas==3.0.2`
+- `pymupdf==1.27.2.2`
 
-```bash
-aws configure   # or set AWS_PROFILE / env vars
-```
+## Configuration
 
 Update the default S3 bucket names in `ui.py` (or type your own in the UI at runtime):
-- S3 Bucket for Processing
-- S3 Bucket for BDA Processing
+- **S3 Bucket for Processing** — default `ocr-demo-REDACTED`
+- **S3 Bucket for BDA Processing** — default `bda-demo-REDACTED`
+
+The `bedrock-runtime` client is configured with `read_timeout=3600` to support long-running adaptive-thinking variants.
 
 ## Usage
 
@@ -92,65 +115,37 @@ Update the default S3 bucket names in `ui.py` (or type your own in the UI at run
 python app.py
 ```
 
-Open http://localhost:7860. Then:
+Open http://localhost:7860. By default **Use Bedrock** and **Use BDA** are checked. Select a sample or upload your own image/PDF and click **🚀 Process File**.
 
-1. **Select a sample image** from the dropdown or upload your own
-2. **Pick engines** — check Textract / Bedrock / BDA
-3. **Click "Process File"**
-4. Review results in the comparison table — each row is a model/effort-level variant showing processing time, cost, and accuracy
-
-## Sample Data
-
-The repo ships with 11 sample images covering various document types:
-
-| Sample | Has Schema | Has Truth |
-|---|---|---|
-| driver_license.png | generic fallback | ✅ |
-| graphic.jpg | ✅ | ✅ |
-| handwriting.jpg | ✅ | ✅ |
-| handwriting2.jpg | ✅ | ✅ |
-| insurance_card.png | generic fallback | ✅ |
-| insurance_claim.png | generic fallback | ✅ |
-| nutrition.jpg | ✅ | ✅ |
-| provider_notes.png | generic fallback | ✅ |
-| reverse_sheet.png | ✅ | ✅ |
-| schedule_table.png | ✅ | ✅ |
-| sheet.jpg | ✅ | ✅ |
-
-To add your own:
-1. Drop images into `sample/images/`
-2. (Optional) Add a matching `sample/schema/<basename>.json` — without one, a generic template is used
-3. (Optional) Add a matching `sample/truth/<basename>.json` for accuracy scoring
-
-## Project Structure
+## Project structure
 
 ```
 .
-├── app.py                      # Gradio entry point
-├── ui.py                       # UI panels
+├── app.py                      # Gradio entry point + row-click wiring
+├── ui.py                       # UI panels (single-tab Response, Truth, Compare)
 ├── event_handler.py            # Gradio event wiring
-├── processor.py                # Parallel engine orchestration + benchmark expansion
-├── sample_handler.py           # Sample loading + schema fallback logic
+├── processor.py                # Parallel orchestration — expands all Bedrock variants
+├── sample_handler.py           # Sample loading + generic-schema fallback
 ├── preview_handler.py          # Image/PDF preview
 ├── engines/
-│   ├── base.py
 │   ├── textract_engine.py
-│   ├── bedrock_engine.py       # Converse API for all models (image + PDF)
+│   ├── bedrock_engine.py       # Converse API for all models + JSON repair pipeline
 │   └── bda_engine.py
 ├── shared/
 │   ├── config.py               # BEDROCK_MODELS, EFFORT_LEVELS, API_COSTS
-│   ├── aws_client.py           # 1-hour read_timeout for bedrock-runtime
-│   ├── image_utils.py
-│   ├── prompt_manager.py
-│   ├── truth_handler.py
+│   ├── aws_client.py           # 1-hour read_timeout bedrock-runtime client
+│   ├── prompt_manager.py       # Strict JSON-only prompt instructions
 │   ├── evaluator.py            # Recursive field-level accuracy
-│   ├── cost_calculator.py
-│   └── comparison_utils.py
+│   └── comparison_utils.py     # Diff-view HTML renderer
 └── sample/
     ├── images/
     ├── schema/
     └── truth/
 ```
+
+## Credits
+
+This project is based on the [aws-samples/ocr-with-aws-ai-services](https://github.com/aws-samples/ocr-with-aws-ai-services) repository by AWS. This fork adds benchmark mode across 8 Bedrock foundation models with reasoning effort variants, unified Converse API for images and PDFs, an interactive Gradio 6 UI with row-click drill-down, and a robust multi-stage JSON repair pipeline for model outputs.
 
 ## License
 

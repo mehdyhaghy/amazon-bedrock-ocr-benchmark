@@ -1,22 +1,15 @@
 import os
 import gradio as gr
-import datetime
 from shared.config import CUSTOM_THEME, logger
 from ui import create_input_panel, create_common_options_panel, create_results_panel, create_results_table
 from event_handler import setup_event_handlers
 
 def create_ocr_app():
     """Create the OCR application with all components"""
-    with gr.Blocks() as app:
-        gr.Markdown("# 📝 Multi-Engine OCR Application\n\nUpload an image containing text and select your preferred processing engines.")
+    with gr.Blocks(title="Amazon Bedrock OCR Benchmark") as app:
+        gr.Markdown("# 📝 Amazon Bedrock OCR Benchmark")
         
         # Current timestamp display
-        timestamp_html = gr.HTML(
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            label="Current Time",
-            every=1
-        )
-        
         with gr.Row():
             # Left column for inputs
             with gr.Column(scale=1):
@@ -29,7 +22,7 @@ def create_ocr_app():
                 with gr.Row():
                     use_textract = gr.Checkbox(value=True, label="Use Textract")
                     use_bedrock = gr.Checkbox(value=True, label="Use Bedrock")
-                    use_bda = gr.Checkbox(value=False, label="Use BDA")
+                    use_bda = gr.Checkbox(value=True, label="Use BDA")
                 
                 # Create common options panel
                 common_options, s3_bucket, document_type, enable_structured_output, output_schema, bedrock_model, bda_s3_bucket, use_bda_blueprint = create_common_options_panel()
@@ -45,21 +38,53 @@ def create_ocr_app():
                 # Results panel with tabs for each engine
                 results_panel, input_components, output_components = create_results_panel()
                 
-                # Wire row-click to show the selected engine's raw JSON in the Bedrock tab
-                # and hide the extracted text box (JSON has all the data)
-                def _on_row_select(results_map, evt: gr.SelectData):
+                # Wire row-click to show the selected engine's response in the Response tab
+                def _on_row_select(results_map, truth, evt: gr.SelectData):
+                    empty = (None, gr.update(visible=False, value=""),
+                             gr.update(visible=False, value=None), "<div></div>",
+                             "<div>Click a row in the Comparison Results table to see its diff against ground truth</div>")
+                    print(f"[row_select] results_map keys={list(results_map.keys()) if results_map else None}, truth type={type(truth).__name__}, truth keys={list(truth.keys())[:3] if isinstance(truth, dict) else None}, evt.index={evt.index if evt else None}")
                     if not results_map or evt is None or evt.index is None:
-                        return None, gr.update()
+                        return empty
                     row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
                     keys = list(results_map.keys())
-                    if 0 <= row_idx < len(keys):
-                        return results_map[keys[row_idx]], gr.update(visible=False)
-                    return None, gr.update()
+                    if not (0 <= row_idx < len(keys)):
+                        return empty
+                    entry = results_map[keys[row_idx]] or {}
+                    if isinstance(entry, dict) and "json" in entry:
+                        j = entry.get("json")
+                        text = entry.get("text") or ""
+                        img = entry.get("image")
+                        cost_html = entry.get("cost_html") or "<div></div>"
+                    else:
+                        j = entry
+                        text = ""
+                        img = None
+                        cost_html = "<div></div>"
+                    # Build diff view if truth is available
+                    from shared.comparison_utils import create_diff_view
+                    if truth and j:
+                        diff_html = create_diff_view(truth, j, engine_name=keys[row_idx])
+                    else:
+                        diff_html = "<div>No ground truth available for comparison</div>"
+                    return (
+                        j,
+                        gr.update(value=text, visible=bool(text)),
+                        gr.update(value=img, visible=img is not None),
+                        cost_html,
+                        diff_html,
+                    )
                 
                 results_table.select(
                     fn=_on_row_select,
-                    inputs=[results_json_state],
-                    outputs=[input_components["bedrock_json"], input_components["bedrock_text"]]
+                    inputs=[results_json_state, input_components["truth_json"]],
+                    outputs=[
+                        input_components["response_json"],
+                        input_components["response_text"],
+                        input_components["response_image"],
+                        input_components["response_cost"],
+                        input_components["comparison_view"],
+                    ]
                 )
         
         # Insert global status at the beginning of output components

@@ -289,7 +289,47 @@ class BedrockEngine(OCREngine):
                         start = extracted_text.find('{')
                         end = extracted_text.rfind('}')
                         if start != -1 and end > start:
-                            structured_json = json.loads(extracted_text[start:end + 1])
+                            candidate = extracted_text[start:end + 1]
+                            # Fix common model-introduced JSON issues:
+                            # Chinese colons, BOMs, smart quotes, unescaped newlines in strings
+                            candidate = (candidate
+                                         .replace('\ufeff', '')
+                                         .replace('：', ':')
+                                         .replace('\u201c', '"').replace('\u201d', '"')
+                                         .replace('\u2018', "'").replace('\u2019', "'"))
+                            # Remove trailing commas before } or ] (invalid in JSON but some
+                            # models produce them)
+                            import re
+                            candidate = re.sub(r',(\s*[}\]])', r'\1', candidate)
+                            try:
+                                structured_json = json.loads(candidate, strict=False)
+                            except json.JSONDecodeError:
+                                # Last resort: replace raw control chars in string regions
+                                # by escaping newlines/tabs that appear inside quoted strings
+                                def _escape_ctrl_in_strings(s):
+                                    # Walk through and escape newlines/tabs inside "..." regions
+                                    out = []
+                                    in_str = False
+                                    i = 0
+                                    while i < len(s):
+                                        c = s[i]
+                                        if c == '"' and (i == 0 or s[i - 1] != '\\'):
+                                            in_str = not in_str
+                                            out.append(c)
+                                        elif in_str and c == '\n':
+                                            out.append('\\n')
+                                        elif in_str and c == '\t':
+                                            out.append('\\t')
+                                        elif in_str and c == '\r':
+                                            out.append('\\r')
+                                        else:
+                                            out.append(c)
+                                        i += 1
+                                    return ''.join(out)
+                                try:
+                                    structured_json = json.loads(_escape_ctrl_in_strings(candidate), strict=False)
+                                except json.JSONDecodeError:
+                                    structured_json = {"text": extracted_text}
                         else:
                             structured_json = {"text": extracted_text}
                     except json.JSONDecodeError:
@@ -301,6 +341,22 @@ class BedrockEngine(OCREngine):
                         and set(structured_json.keys()) <= {"type", "properties", "required", "items", "$schema"}
                         and isinstance(structured_json.get("properties"), dict)):
                     structured_json = structured_json["properties"]
+                
+                # Unwrap per-field {"type":"string","value":...} wrappers that some
+                # models (e.g. Llama 4) produce when given a JSON schema prompt.
+                def _unwrap_field_values(obj):
+                    if isinstance(obj, dict):
+                        # Schema-field wrapper with a value: return the value
+                        if "value" in obj and set(obj.keys()) <= {"type", "value", "description", "format", "enum"}:
+                            return _unwrap_field_values(obj["value"])
+                        # Schema-field wrapper without value: treat as empty/None
+                        if "type" in obj and set(obj.keys()) <= {"type", "description", "format", "enum"}:
+                            return None
+                        return {k: _unwrap_field_values(v) for k, v in obj.items()}
+                    if isinstance(obj, list):
+                        return [_unwrap_field_values(v) for v in obj]
+                    return obj
+                structured_json = _unwrap_field_values(structured_json)
                 
                 logger.info(f"Bedrock processing completed in {timing_ctx.process_time:.2f} seconds")
                 overall_process_time = time.time() - overall_start_time
