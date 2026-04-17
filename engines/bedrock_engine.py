@@ -23,7 +23,7 @@ def _build_thinking_params(model_id, effort_level):
         return {}
     thinking_type, _ = EFFORT_LEVELS[model_id]
     if thinking_type == "adaptive":
-        # Claude Opus 4.7 / Sonnet 4.6 — adaptive thinking with effort in output_config
+        # Claude Sonnet 4.6 — adaptive thinking with effort in output_config
         return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort_level}}
     elif thinking_type == "budget":
         # Claude Sonnet 4 / Haiku 4.5 — manual budget_tokens

@@ -10,7 +10,6 @@ MAX_IMAGE_SIZE = 5 * 1024 * 1024 - 100000  # 5MB minus buffer for Bedrock
 
 # Available Bedrock models
 BEDROCK_MODELS = {
-    "Claude Opus 4.7": "us.anthropic.claude-opus-4-7",
     "Claude Sonnet 4.6": "us.anthropic.claude-sonnet-4-6",
     "Claude Haiku 4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "Amazon Nova 2 Lite": "us.amazon.nova-2-lite-v1:0",
@@ -24,11 +23,10 @@ BEDROCK_MODELS = {
 POSTPROCESSING_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # Effort levels per model: maps model_id to (thinking_type, list_of_levels)
-# - "adaptive": Claude Opus 4.7 / Sonnet 4.6 — uses thinking.type="adaptive" + effort param via invoke_model
-# - "budget": Claude Sonnet 4 / Haiku 4.5 — uses thinking.type="enabled" + budget_tokens via invoke_model
+# - "adaptive": Claude Sonnet 4.6 — uses thinking.type="adaptive" + effort param via invoke_model
+# - "budget": Claude Haiku 4.5 — uses thinking.type="enabled" + budget_tokens via invoke_model
 # - "nova": Nova 2 Lite — uses reasoningConfig via converse additionalModelRequestFields
 EFFORT_LEVELS = {
-    "us.anthropic.claude-opus-4-7": ("adaptive", ["low", "medium", "high"]),
     "us.anthropic.claude-sonnet-4-6": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": ("budget", [1024, 4096, 16384]),
     "us.amazon.nova-2-lite-v1:0": ("nova", ["low", "medium"]),
@@ -42,10 +40,6 @@ API_COSTS = {
     
     'bedrock': {
         # Claude models
-        'us.anthropic.claude-opus-4-7': {
-            'input': 0.005 / 1000,   # $5.00 per 1M input tokens
-            'output': 0.025 / 1000   # $25.00 per 1M output tokens
-        },
         'us.anthropic.claude-sonnet-4-6': {
             'input': 0.003 / 1000,   # $3.00 per 1M input tokens
             'output': 0.015 / 1000   # $15.00 per 1M output tokens
