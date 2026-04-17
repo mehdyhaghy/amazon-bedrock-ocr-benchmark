@@ -12,7 +12,8 @@ def setup_event_handlers(
     bedrock_model, document_type, bda_s3_bucket,
     input_components, output_components, use_bda_blueprint,
     results_table, image_preview, pdf_preview, pdf_controls, 
-    prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path):
+    prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path,
+    results_json_state=None):
     """Setup all event handlers for the UI"""
     
     # Get global_status from input_components
@@ -109,7 +110,7 @@ def setup_event_handlers(
             document_type, enable_structured_output, output_schema, use_bda_blueprint,
             current_sample_name  # Pass the current sample name
         ],
-        outputs=output_components + [results_table]
+        outputs=output_components + [results_table, results_json_state]
     )
     
     # Process all samples
@@ -123,15 +124,30 @@ def setup_event_handlers(
         outputs=[global_status, results_table]
     )
     
-    # Add event handler for comparison view updates
-    diff_engine.change(
-        fn=lambda engine, truth, textract, bedrock, bda: create_diff_view(
-            truth or {}, 
-            {"Textract": textract, "Bedrock": bedrock, "BDA": bda}.get(engine, {}) or {}
-        ),
-        inputs=[diff_engine, truth_json, textract_json, bedrock_json, bda_json],
-        outputs=comparison_view
-    )
+    # Add event handler for comparison view updates — pulls from per-variant JSON map
+    def _diff_handler(engine, truth, results_map):
+        if not engine or not truth:
+            return "<div>Select an engine to compare against ground truth</div>"
+        extracted = (results_map or {}).get(engine)
+        if extracted is None:
+            return f"<div>No JSON output available for {engine}</div>"
+        return create_diff_view(truth, extracted)
+    
+    if results_json_state is not None:
+        diff_engine.change(
+            fn=_diff_handler,
+            inputs=[diff_engine, truth_json, results_json_state],
+            outputs=comparison_view
+        )
+        # When new results arrive, refresh the dropdown choices to include all engine variants
+        results_json_state.change(
+            fn=lambda results_map: gr.update(
+                choices=list(results_map.keys()) if results_map else [],
+                value=(list(results_map.keys())[0] if results_map else None)
+            ),
+            inputs=[results_json_state],
+            outputs=[diff_engine]
+        )
     
     logger.info("Event handlers setup completed")
     

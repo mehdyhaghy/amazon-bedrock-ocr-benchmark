@@ -1,0 +1,1 @@
+{"type":"object","properties":{"document_title":{"type":"string"},"provider":{"type":"string"},"patient":{"type":"string"},"history_of_present_illness":{"type":"string"},"ROS":{"type":"string"},"Meds":{"type":"string"},"PMHx":{"type":"string"},"Allergies":{"type":"string"},"FHx":{"type":"string"},"Social_Hx":{"type":"string"}}}

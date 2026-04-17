@@ -159,17 +159,18 @@ def create_diff_view(truth_data_or_result, extracted_data=None):
     
     html_output = f"""
     <style>
-    .diff-container {{ font-family: Arial, sans-serif; margin: 10px; }}
-    .diff-table {{ width: 100%; border-collapse: collapse; }}
-    .diff-table th, .diff-table td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-    .diff-table th {{ background-color: #f2f2f2; }}
-    .match {{ background-color: #e6ffe6; }} /* Light green */
-    .mismatch {{ background-color: #ffe6e6; }} /* Light red */
-    .parent-path {{ background-color: #f0f0f0; font-weight: bold; }}
-    .value-cell {{ font-family: monospace; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }}
-    .missing {{ color: red; font-style: italic; }}
-    .sub-table {{ width: 100%; border-collapse: collapse; }}
-    .sub-table th, .sub-table td {{ border: 1px solid #ccc; padding: 2px 4px; }}
+    .diff-container {{ font-family: Arial, sans-serif; margin: 10px; color: #111; }}
+    .diff-table {{ width: 100%; border-collapse: collapse; color: #111; }}
+    .diff-table th, .diff-table td {{ border: 1px solid #ddd; padding: 8px; text-align: left; color: #111; }}
+    .diff-table th {{ background-color: #f2f2f2; color: #111; }}
+    .match {{ background-color: #e6ffe6; color: #111; }} /* Light green */
+    .mismatch {{ background-color: #ffe6e6; color: #111; }} /* Light red */
+    .parent-path {{ background-color: #f0f0f0; color: #111; font-weight: bold; }}
+    .value-cell {{ font-family: monospace; white-space: pre-wrap; max-height: 200px; overflow-y: auto; color: #111; }}
+    .missing {{ color: #c00; font-style: italic; }}
+    .sub-table {{ width: 100%; border-collapse: collapse; color: #111; }}
+    .sub-table th, .sub-table td {{ border: 1px solid #ccc; padding: 2px 4px; color: #111; }}
+    .diff-container pre {{ color: #111; }}
     </style>
     {html_output}
     """

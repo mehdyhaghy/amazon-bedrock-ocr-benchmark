@@ -28,7 +28,7 @@ def create_ocr_app():
                 # Engine selection
                 with gr.Row():
                     use_textract = gr.Checkbox(value=True, label="Use Textract")
-                    use_bedrock = gr.Checkbox(value=False, label="Use Bedrock")
+                    use_bedrock = gr.Checkbox(value=True, label="Use Bedrock")
                     use_bda = gr.Checkbox(value=False, label="Use BDA")
                 
                 # Create common options panel
@@ -40,10 +40,27 @@ def create_ocr_app():
             with gr.Column(scale=2):
                 # Global status for all processing
                 global_status = gr.HTML("<div class='status-ready'>Ready for processing</div>", label="Status")
-                results_table = create_results_table()
+                results_table, results_json_state = create_results_table()
                 
                 # Results panel with tabs for each engine
                 results_panel, input_components, output_components = create_results_panel()
+                
+                # Wire row-click to show the selected engine's raw JSON in the Bedrock tab
+                # and hide the extracted text box (JSON has all the data)
+                def _on_row_select(results_map, evt: gr.SelectData):
+                    if not results_map or evt is None or evt.index is None:
+                        return None, gr.update()
+                    row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+                    keys = list(results_map.keys())
+                    if 0 <= row_idx < len(keys):
+                        return results_map[keys[row_idx]], gr.update(visible=False)
+                    return None, gr.update()
+                
+                results_table.select(
+                    fn=_on_row_select,
+                    inputs=[results_json_state],
+                    outputs=[input_components["bedrock_json"], input_components["bedrock_text"]]
+                )
         
         # Insert global status at the beginning of output components
         output_components.insert(0, global_status)
@@ -56,7 +73,8 @@ def create_ocr_app():
             bedrock_model, document_type, bda_s3_bucket,
             input_components, output_components, use_bda_blueprint,
             results_table, image_preview, pdf_preview, pdf_controls,
-            prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path
+            prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path,
+            results_json_state=results_json_state
         )
     
     return app

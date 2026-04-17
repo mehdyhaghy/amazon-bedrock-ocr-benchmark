@@ -79,11 +79,15 @@ def create_results_table():
         label="Comparison Results",
         interactive=False,
         wrap=True,
-        column_widths=["130px", "130px", "150px", "110px", "110px", "110px"],
-        elem_id="results-dataframe"
+        max_height=500,
+        column_widths=["200px", "130px", "150px", "110px", "110px", "110px"],
+        elem_id="results-dataframe",
+        elem_classes="results-dataframe"
     )
+    # State to store per-engine JSON outputs for row-click lookup
+    results_json_state = gr.State({})
     
-    return results_table
+    return results_table, results_json_state
 
 def create_common_options_panel():
     """Create common options panel for all engines"""
@@ -170,8 +174,8 @@ def create_results_panel():
             
             with gr.TabItem("Bedrock"):
                 bedrock_status = gr.HTML("<div></div>", label="Status")
-                bedrock_extracted_text = gr.Textbox(label="Extracted Text", lines=10, interactive=False)
                 bedrock_json = gr.JSON(label="Raw JSON Output")
+                bedrock_extracted_text = gr.Textbox(label="Extracted Text", lines=10, interactive=False)
                 bedrock_image = gr.Image(label="Visualization", interactive=False)
                 
                 bedrock_cost = gr.HTML("<div></div>", label="API Cost")
@@ -189,9 +193,11 @@ def create_results_panel():
             
             with gr.TabItem("Compare"):
                 diff_engine = gr.Dropdown(
-                    choices=["Textract", "Bedrock", "BDA"], 
+                    choices=[],
                     label="Select engine to compare with ground truth",
-                    value="Bedrock"
+                    value=None,
+                    allow_custom_value=False,
+                    interactive=True
                 )
                 comparison_view = gr.HTML("<div>Select an engine and process an image to see comparison</div>")
     
