@@ -110,8 +110,21 @@ uv pip install -r requirements.txt
 
 ## Configuration
 
-Update the default S3 bucket name in `ui.py` (or type your own in the UI at runtime):
-- **S3 Bucket for Processing** — default `ocr-demo-REDACTED` (used by Textract on PDFs and by BDA)
+The default S3 bucket (used by Textract for PDFs and by BDA) is **not committed**. Set it via one of:
+
+1. **Local settings file** (recommended):
+   ```bash
+   cp shared/local_settings.example.py shared/local_settings.py
+   # edit DEFAULT_S3_BUCKET in shared/local_settings.py
+   ```
+   `shared/local_settings.py` is gitignored.
+
+2. **Environment variable**:
+   ```bash
+   export OCR_S3_BUCKET=my-ocr-bucket
+   ```
+
+3. **At runtime** in the UI's **S3 Bucket for Processing** textbox.
 
 The `bedrock-runtime` client is configured with `read_timeout=120` (2 minutes) and `max_attempts=0` (no retries) so slow/stuck models fail fast and are surfaced as errors in the results grid instead of blocking the whole run.
 

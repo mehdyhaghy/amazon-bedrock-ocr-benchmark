@@ -1,4 +1,5 @@
 import logging
+import os
 import gradio as gr
 
 # Configure logging
@@ -7,6 +8,15 @@ logger = logging.getLogger(__name__)
 
 # Image size constants
 MAX_IMAGE_SIZE = 5 * 1024 * 1024 - 100000  # 5MB minus buffer for Bedrock
+
+# Default S3 bucket used by Textract (for PDFs) and BDA.
+# Resolution order: shared/local_settings.py (gitignored) -> OCR_S3_BUCKET env var -> "".
+# Users can also override at runtime via the UI textbox.
+try:
+    from .local_settings import DEFAULT_S3_BUCKET as _LOCAL_S3_BUCKET
+except ImportError:
+    _LOCAL_S3_BUCKET = ""
+DEFAULT_S3_BUCKET = _LOCAL_S3_BUCKET or os.environ.get("OCR_S3_BUCKET", "")
 
 # Available Bedrock models
 BEDROCK_MODELS = {

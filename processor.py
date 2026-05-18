@@ -4,7 +4,7 @@ import pandas as pd
 import os
 
 # Import from reorganized modules
-from shared.config import logger, BEDROCK_MODELS, STATUS_HTML, POSTPROCESSING_MODEL, EFFORT_LEVELS
+from shared.config import logger, BEDROCK_MODELS, STATUS_HTML, POSTPROCESSING_MODEL, EFFORT_LEVELS, DEFAULT_S3_BUCKET
 from engines.textract_engine import TextractEngine
 from engines.bedrock_engine import BedrockEngine
 from engines.bda_engine import BDAEngine
@@ -175,7 +175,7 @@ def create_results_dataframe(engine_results):
     return pd.DataFrame(final_results)
 
 def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
-                             bedrock_model_name, bda_s3_bucket="", s3_bucket="ocr-demo-REDACTED",
+                             bedrock_model_name, bda_s3_bucket="", s3_bucket=DEFAULT_S3_BUCKET,
                              document_type="generic", enable_structured_output=True, output_schema="",
                              use_bda_blueprint=False, image_name=None):
     """Process image with selected OCR engines in parallel"""

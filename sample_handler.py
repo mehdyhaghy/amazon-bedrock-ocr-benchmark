@@ -10,7 +10,7 @@ from PIL import Image
 from engines.textract_engine import TextractEngine
 from engines.bedrock_engine import BedrockEngine
 from engines.bda_engine import BDAEngine
-from shared.config import logger, BEDROCK_MODELS
+from shared.config import logger, BEDROCK_MODELS, DEFAULT_S3_BUCKET
 from shared.cost_calculator import calculate_full_textract_cost
 from shared.evaluator import load_truth_data, calculate_accuracy, get_detailed_accuracy
 
@@ -91,7 +91,7 @@ def on_sample_selected(sample_filename):
 
 
 def process_all_samples(use_textract, use_bedrock, use_bda,
-                     bedrock_model_name, bda_s3_bucket="", s3_bucket="ocr-demo-REDACTED",
+                     bedrock_model_name, bda_s3_bucket="", s3_bucket=DEFAULT_S3_BUCKET,
                      document_type="generic", enable_structured_output=True, output_schema="",
                      use_bda_blueprint=False):
     """Process all sample images with parallel engine processing"""

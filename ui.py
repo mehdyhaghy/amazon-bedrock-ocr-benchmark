@@ -1,6 +1,6 @@
 import gradio as gr
 import pandas as pd
-from shared.config import CUSTOM_THEME, BEDROCK_MODELS, STATUS_HTML
+from shared.config import CUSTOM_THEME, BEDROCK_MODELS, STATUS_HTML, DEFAULT_S3_BUCKET
 from sample_handler import list_sample_images
 
 def create_input_panel():
@@ -117,7 +117,7 @@ def create_common_options_panel():
         with gr.Row():
             s3_bucket = gr.Textbox(
                 label="S3 Bucket for Processing",
-                value="ocr-demo-REDACTED",
+                value=DEFAULT_S3_BUCKET,
                 placeholder="Enter your S3 bucket name",
                 info="S3 bucket for uploading files for processing (required for all engines, including BDA)",
                 scale=2
