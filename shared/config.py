@@ -20,6 +20,7 @@ DEFAULT_S3_BUCKET = _LOCAL_S3_BUCKET or os.environ.get("OCR_S3_BUCKET", "")
 
 # Available Bedrock models
 BEDROCK_MODELS = {
+    "Claude Opus 4.8": "us.anthropic.claude-opus-4-8",
     "Claude Sonnet 4.6": "us.anthropic.claude-sonnet-4-6",
     "Claude Haiku 4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "Amazon Nova 2 Lite": "us.amazon.nova-2-lite-v1:0",
@@ -33,10 +34,11 @@ BEDROCK_MODELS = {
 POSTPROCESSING_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # Effort levels per model: maps model_id to (thinking_type, list_of_levels)
-# - "adaptive": Claude Sonnet 4.6 — uses thinking.type="adaptive" + effort param via invoke_model
+# - "adaptive": Claude Sonnet 4.6 / Opus 4.8 — uses thinking.type="adaptive" + effort param via invoke_model
 # - "budget": Claude Haiku 4.5 — uses thinking.type="enabled" + budget_tokens via invoke_model
 # - "nova": Nova 2 Lite — uses reasoningConfig via converse additionalModelRequestFields
 EFFORT_LEVELS = {
+    "us.anthropic.claude-opus-4-8": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-sonnet-4-6": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": ("budget", [1024, 4096, 16384]),
     "us.amazon.nova-2-lite-v1:0": ("nova", ["low", "medium"]),
@@ -50,6 +52,10 @@ API_COSTS = {
     
     'bedrock': {
         # Claude models
+        'us.anthropic.claude-opus-4-8': {
+            'input': 0.015 / 1000,   # $15.00 per 1M input tokens
+            'output': 0.075 / 1000   # $75.00 per 1M output tokens
+        },
         'us.anthropic.claude-sonnet-4-6': {
             'input': 0.003 / 1000,   # $3.00 per 1M input tokens
             'output': 0.015 / 1000   # $15.00 per 1M output tokens
