@@ -4,10 +4,11 @@ import pandas as pd
 import os
 
 # Import from reorganized modules
-from shared.config import logger, BEDROCK_MODELS, STATUS_HTML, POSTPROCESSING_MODEL, EFFORT_LEVELS, DEFAULT_S3_BUCKET
+from shared.config import logger, BEDROCK_MODELS, CEREBRAS_MODELS, STATUS_HTML, POSTPROCESSING_MODEL, EFFORT_LEVELS, DEFAULT_S3_BUCKET
 from engines.textract_engine import TextractEngine
 from engines.bedrock_engine import BedrockEngine
 from engines.bda_engine import BDAEngine
+from engines.cerebras_engine import CerebrasEngine
 from shared.cost_calculator import calculate_bedrock_cost, calculate_bda_cost, calculate_full_textract_cost
 from shared.evaluator import load_truth_data, calculate_accuracy, get_detailed_accuracy
 from shared.comparison_utils import create_diff_view
@@ -177,7 +178,7 @@ def create_results_dataframe(engine_results):
 def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                              bedrock_model_name, bda_s3_bucket="", s3_bucket=DEFAULT_S3_BUCKET,
                              document_type="generic", enable_structured_output=True, output_schema="",
-                             use_bda_blueprint=False, image_name=None):
+                             use_bda_blueprint=False, image_name=None, use_cerebras=False):
     """Process image with selected OCR engines in parallel"""
     total_start = time.time()
     default_result = {"text": "", "json": None, "image": None, "time": 0, "accuracy": 0, "cost": 0}
@@ -231,7 +232,7 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
             {}
         ]
     
-    if not any([use_textract, use_bedrock, use_bda]):
+    if not any([use_textract, use_bedrock, use_bda, use_cerebras]):
         return [
             STATUS_HTML["error"]("Selection", 0, "Please select at least one OCR engine"),
             "<div></div>", "", None, None,
@@ -271,8 +272,8 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         _bedrock_result().get("json"), 
         _bedrock_result().get("image"),
         
-        "<div></div>" if not use_bedrock else _bedrock_result().get("cost_html", "<div></div>"), 
-        None if not use_bedrock else _bedrock_result().get("token_usage"),
+        "<div></div>" if not (use_bedrock or use_cerebras) else _bedrock_result().get("cost_html", "<div></div>"), 
+        None if not (use_bedrock or use_cerebras) else _bedrock_result().get("token_usage"),
         
         engine_status.get("BDA", "<div></div>"), 
         engine_results.get("BDA", {}).get("text", ""), 
@@ -292,6 +293,7 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
     textract_engine = TextractEngine()
     bedrock_engine = BedrockEngine()
     bda_engine = BDAEngine()
+    cerebras_engine = CerebrasEngine()
 
     # Process with selected engines in parallel
     with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -338,6 +340,20 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                         }
                     )
         
+        if use_cerebras:
+            # External Cerebras provider. Gemma 4's reasoning levels are
+            # equivalent today, so each model runs as a single variant (reasoning off).
+            for display_name, m_id in CEREBRAS_MODELS.items():
+                futures[display_name] = executor.submit(
+                    cerebras_engine.process_image,
+                    image,
+                    {
+                        'model_id': m_id,
+                        'document_type': document_type,
+                        'output_schema': output_schema if output_schema else None
+                    }
+                )
+
         if use_bda:
             futures['BDA'] = executor.submit(
                 bda_engine.process_image,
@@ -401,8 +417,8 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     _bedrock_result().get("json"), 
                     _bedrock_result().get("image"),
                     
-                    "<div></div>" if not use_bedrock else _bedrock_result().get("cost_html", "<div></div>"), 
-                    None if not use_bedrock else _bedrock_result().get("token_usage"),
+                    "<div></div>" if not (use_bedrock or use_cerebras) else _bedrock_result().get("cost_html", "<div></div>"), 
+                    None if not (use_bedrock or use_cerebras) else _bedrock_result().get("token_usage"),
                     
                     engine_status.get("BDA", "<div></div>"), 
                     engine_results.get("BDA", {}).get("text", ""), 
@@ -456,8 +472,8 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     _bedrock_result().get("json"), 
                     _bedrock_result().get("image"),
                     
-                    "<div></div>" if not use_bedrock else _bedrock_result().get("cost_html", "<div></div>"), 
-                    None if not use_bedrock else _bedrock_result().get("token_usage"),
+                    "<div></div>" if not (use_bedrock or use_cerebras) else _bedrock_result().get("cost_html", "<div></div>"), 
+                    None if not (use_bedrock or use_cerebras) else _bedrock_result().get("token_usage"),
                     
                     engine_status.get("BDA", "<div></div>"), 
                     engine_results.get("BDA", {}).get("text", ""), 
@@ -521,8 +537,8 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         _bedrock_result().get("json"), 
         _bedrock_result().get("image"),
         
-        "<div></div>" if not use_bedrock else _bedrock_result().get("cost_html", "<div></div>"), 
-        None if not use_bedrock else _bedrock_result().get("token_usage"),
+        "<div></div>" if not (use_bedrock or use_cerebras) else _bedrock_result().get("cost_html", "<div></div>"), 
+        None if not (use_bedrock or use_cerebras) else _bedrock_result().get("token_usage"),
         
         engine_status.get("BDA", "<div></div>"), 
         engine_results.get("BDA", {}).get("text", ""), 

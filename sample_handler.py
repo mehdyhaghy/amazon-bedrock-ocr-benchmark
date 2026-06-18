@@ -10,7 +10,8 @@ from PIL import Image
 from engines.textract_engine import TextractEngine
 from engines.bedrock_engine import BedrockEngine
 from engines.bda_engine import BDAEngine
-from shared.config import logger, BEDROCK_MODELS, DEFAULT_S3_BUCKET
+from engines.cerebras_engine import CerebrasEngine
+from shared.config import logger, BEDROCK_MODELS, CEREBRAS_MODELS, DEFAULT_S3_BUCKET
 from shared.cost_calculator import calculate_full_textract_cost
 from shared.evaluator import load_truth_data, calculate_accuracy, get_detailed_accuracy
 
@@ -93,7 +94,7 @@ def on_sample_selected(sample_filename):
 def process_all_samples(use_textract, use_bedrock, use_bda,
                      bedrock_model_name, bda_s3_bucket="", s3_bucket=DEFAULT_S3_BUCKET,
                      document_type="generic", enable_structured_output=True, output_schema="",
-                     use_bda_blueprint=False):
+                     use_bda_blueprint=False, use_cerebras=False):
     """Process all sample images with parallel engine processing"""
     
     # Get list of all sample images
@@ -105,7 +106,8 @@ def process_all_samples(use_textract, use_bedrock, use_bda,
     results_by_engine = {
         "Textract": {"count": 0, "total_time": 0, "total_cost": 0, "accuracy_values": []},
         "Bedrock": {"count": 0, "total_time": 0, "total_cost": 0, "accuracy_values": []},
-        "BDA": {"count": 0, "total_time": 0, "total_cost": 0, "accuracy_values": []}
+        "BDA": {"count": 0, "total_time": 0, "total_cost": 0, "accuracy_values": []},
+        "Cerebras": {"count": 0, "total_time": 0, "total_cost": 0, "accuracy_values": []}
     }
     
     # Create results directory if it doesn't exist
@@ -125,9 +127,12 @@ def process_all_samples(use_textract, use_bedrock, use_bda,
     textract_engine = TextractEngine()
     bedrock_engine = BedrockEngine()
     bda_engine = BDAEngine()
+    cerebras_engine = CerebrasEngine()
     
     # Get bedrock model ID if needed
     model_id = BEDROCK_MODELS.get(bedrock_model_name, "") if use_bedrock else ""
+    # Cerebras model ID (single model for batch mode)
+    cerebras_model_id = next(iter(CEREBRAS_MODELS.values()), "gemma-4-31b-trial")
     
     # Process each sample
     for i, sample_name in enumerate(samples):
@@ -176,6 +181,16 @@ def process_all_samples(use_textract, use_bedrock, use_bda,
                         bedrock_engine.process_image,
                         image, {
                             'model_id': model_id,
+                            'document_type': document_type,
+                            'output_schema': image_output_schema if enable_structured_output and image_output_schema else None
+                        }
+                    )
+                
+                if use_cerebras:
+                    futures['Cerebras'] = executor.submit(
+                        cerebras_engine.process_image,
+                        image, {
+                            'model_id': cerebras_model_id,
                             'document_type': document_type,
                             'output_schema': image_output_schema if enable_structured_output and image_output_schema else None
                         }

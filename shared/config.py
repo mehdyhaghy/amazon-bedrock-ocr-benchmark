@@ -18,6 +18,23 @@ except ImportError:
     _LOCAL_S3_BUCKET = ""
 DEFAULT_S3_BUCKET = _LOCAL_S3_BUCKET or os.environ.get("OCR_S3_BUCKET", "")
 
+# Cerebras API key for the external Cerebras Inference provider.
+# Resolution order: shared/local_settings.py (gitignored) -> CEREBRAS_API_KEY env var -> "".
+try:
+    from .local_settings import CEREBRAS_API_KEY as _LOCAL_CEREBRAS_API_KEY
+except ImportError:
+    _LOCAL_CEREBRAS_API_KEY = ""
+CEREBRAS_API_KEY = _LOCAL_CEREBRAS_API_KEY or os.environ.get("CEREBRAS_API_KEY", "")
+
+# Optional override for the Cerebras API base URL (defaults to the SDK's built-in endpoint).
+CEREBRAS_BASE_URL = os.environ.get("CEREBRAS_BASE_URL", "")
+
+# Available Cerebras models (external OpenAI-style chat-completions provider).
+# Maps a display name -> Cerebras model ID. See the Gemma 4 Multimodal Quick Start Guide.
+CEREBRAS_MODELS = {
+    "Gemma 4 31B (Cerebras)": "gemma-4-31b-trial",
+}
+
 # Available Bedrock models
 BEDROCK_MODELS = {
     "Claude Opus 4.8": "us.anthropic.claude-opus-4-8",
@@ -27,7 +44,19 @@ BEDROCK_MODELS = {
     "Pixtral Large": "us.mistral.pixtral-large-2502-v1:0",
     "Mistral Large 3": "mistral.mistral-large-3-675b-instruct",
     "Llama 4 Maverick 17B": "us.meta.llama4-maverick-17b-instruct-v1:0",
-    "Llama 4 Scout 17B": "us.meta.llama4-scout-17b-instruct-v1:0"
+    "Llama 4 Scout 17B": "us.meta.llama4-scout-17b-instruct-v1:0",
+    # Gemma 3 multimodal models — available ON_DEMAND in this account/region
+    # (confirmed via list_foundation_models, TEXT+IMAGE input).
+    "Gemma 3 4B": "google.gemma-3-4b-it",
+    "Gemma 3 12B": "google.gemma-3-12b-it",
+    "Gemma 3 27B": "google.gemma-3-27b-it",
+    # Gemma 4 on Bedrock — announced (https://aws.amazon.com/blogs/machine-learning/introducing-gemma-4-models-on-amazon-bedrock/)
+    # but NOT yet available in this account/region (list_foundation_models returns only
+    # google.gemma-3-*). Commented out until access is granted so benchmark runs don't fail.
+    # Model IDs below are unverified — confirm against list_foundation_models before enabling.
+    # "Gemma 4 31B": "google.gemma-4-31b-it",
+    # "Gemma 4 26B-A4B": "google.gemma-4-26b-a4b-it",
+    # "Gemma 4 E2B": "google.gemma-4-e2b-it"
 }
 
 # Default model for post-processing
@@ -86,6 +115,27 @@ API_COSTS = {
         'us.meta.llama4-scout-17b-instruct-v1:0': {
             'input': 0.00015 / 1000,  # $0.15 per 1M input tokens
             'output': 0.00045 / 1000  # $0.45 per 1M output tokens
+        },
+        # Google Gemma 3 multimodal models (Bedrock on-demand pricing).
+        'google.gemma-3-4b-it': {
+            'input': 0.00004 / 1000,  # $0.04 per 1M input tokens
+            'output': 0.00008 / 1000  # $0.08 per 1M output tokens
+        },
+        'google.gemma-3-12b-it': {
+            'input': 0.00009 / 1000,  # $0.09 per 1M input tokens
+            'output': 0.00029 / 1000  # $0.29 per 1M output tokens
+        },
+        'google.gemma-3-27b-it': {
+            'input': 0.00023 / 1000,  # $0.23 per 1M input tokens
+            'output': 0.00038 / 1000  # $0.38 per 1M output tokens
+        },
+        # Cerebras-hosted models (external provider). Keyed here so the shared
+        # variant cost path (calculate_bedrock_cost) works unchanged.
+        # NOTE: Gemma 4 31B is a Cerebras Private Preview "trial" with no
+        # published per-token price yet — placeholder 0.0 until pricing is known.
+        'gemma-4-31b-trial': {
+            'input': 0.0,   # TODO: update when Cerebras publishes pricing
+            'output': 0.0   # TODO: update when Cerebras publishes pricing
         }
     },
     'bda': {

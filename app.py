@@ -23,6 +23,7 @@ def create_ocr_app():
                     use_textract = gr.Checkbox(value=True, label="Use Textract")
                     use_bedrock = gr.Checkbox(value=True, label="Use Bedrock")
                     use_bda = gr.Checkbox(value=True, label="Use BDA")
+                    use_cerebras = gr.Checkbox(value=False, label="Use Cerebras")
                 
                 # Create common options panel
                 common_options, s3_bucket, document_type, enable_structured_output, output_schema, bedrock_model, bda_s3_bucket, use_bda_blueprint = create_common_options_panel()
@@ -100,7 +101,8 @@ def create_ocr_app():
             input_components, output_components, use_bda_blueprint,
             results_table, image_preview, pdf_preview, pdf_controls,
             prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path,
-            results_json_state=results_json_state
+            results_json_state=results_json_state,
+            use_cerebras=use_cerebras
         )
     
     return app
