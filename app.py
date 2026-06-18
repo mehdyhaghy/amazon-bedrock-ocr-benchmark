@@ -6,13 +6,25 @@ from event_handler import setup_event_handlers
 
 def create_ocr_app():
     """Create the OCR application with all components"""
-    with gr.Blocks(title="Amazon Bedrock OCR Benchmark") as app:
+    _RESIZE_CSS = """
+    /* Make the left input pane horizontally resizable via a drag handle */
+    #left-pane {
+        resize: horizontal;
+        overflow: auto;
+        min-width: 280px;
+        max-width: 90%;
+        /* room for the resize grip in the bottom-right corner */
+        padding-bottom: 14px;
+        border-right: 2px solid var(--border-color-primary, #444);
+    }
+    """
+    with gr.Blocks(title="Amazon Bedrock OCR Benchmark", css=_RESIZE_CSS) as app:
         gr.Markdown("# 📝 Amazon Bedrock OCR Benchmark")
         
         # Current timestamp display
         with gr.Row():
-            # Left column for inputs
-            with gr.Column(scale=1):
+            # Left column for inputs (resizable via CSS handle on #left-pane)
+            with gr.Column(scale=1, elem_id="left-pane"):
                 # Create input panel
                 (input_panel, sample_dropdown, input_image, refresh_samples, image_preview, pdf_preview,
                  pdf_controls, prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path,
@@ -23,10 +35,10 @@ def create_ocr_app():
                     use_textract = gr.Checkbox(value=True, label="Use Textract")
                     use_bedrock = gr.Checkbox(value=True, label="Use Bedrock")
                     use_bda = gr.Checkbox(value=True, label="Use BDA")
-                    use_cerebras = gr.Checkbox(value=False, label="Use Cerebras")
+                    use_cerebras = gr.Checkbox(value=True, label="Use Cerebras")
                 
                 # Create common options panel
-                common_options, s3_bucket, document_type, enable_structured_output, output_schema, bedrock_model, bda_s3_bucket, use_bda_blueprint = create_common_options_panel()
+                common_options, s3_bucket, document_type, enable_structured_output, output_schema, bedrock_model, bda_s3_bucket, use_bda_blueprint, call_count = create_common_options_panel()
                 
                 # These buttons are now in the input panel under preview
             
@@ -102,7 +114,8 @@ def create_ocr_app():
             results_table, image_preview, pdf_preview, pdf_controls,
             prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path,
             results_json_state=results_json_state,
-            use_cerebras=use_cerebras
+            use_cerebras=use_cerebras,
+            call_count=call_count
         )
     
     return app

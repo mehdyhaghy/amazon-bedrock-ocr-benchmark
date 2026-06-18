@@ -13,7 +13,7 @@ def setup_event_handlers(
     input_components, output_components, use_bda_blueprint,
     results_table, image_preview, pdf_preview, pdf_controls, 
     prev_page_btn, page_info, next_page_btn, current_page, total_pages, current_pdf_path,
-    results_json_state=None, use_cerebras=None):
+    results_json_state=None, use_cerebras=None, call_count=None):
     """Setup all event handlers for the UI"""
     
     # Get global_status from input_components
@@ -109,7 +109,8 @@ def setup_event_handlers(
             bedrock_model, bda_s3_bucket, s3_bucket,
             document_type, enable_structured_output, output_schema, use_bda_blueprint,
             current_sample_name,  # Pass the current sample name (image_name)
-            use_cerebras
+            use_cerebras,
+            call_count
         ],
         outputs=output_components + [results_table, results_json_state]
     ).then(

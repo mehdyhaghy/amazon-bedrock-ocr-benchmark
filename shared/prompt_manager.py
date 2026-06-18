@@ -46,60 +46,101 @@ Ensure the JSON is valid and represents the information accurately.
 IMPORTANT: When returning JSON, do not use code blocks, backticks or markdown formatting.
 """
 
-JSON_TEMPLATE_NO_SCHEMA = """
-Please analyze the content and create an appropriate JSON schema based on the document type.
-Follow these guidelines:
 
-1. If it's an invoice or receipt:
-   - Extract date, invoice number, total amount, tax, vendor details
-   - Itemize line items with quantity, description, unit price and subtotal
-   
-2. If it's a form or application:
-   - Identify all field names and their corresponding values
-   - Group related fields into logical sections
-   
-3. If it's a table:
-   - Preserve the tabular structure with rows and columns
-   - Include column headers as keys
-   
-4. If it's an ID or card:
-   - Extract all personal information fields
-   - Include issuer, ID number, date fields, and other relevant data
-   
-5. For general documents:
-   - Extract titles, subtitles, and section headers
-   - Organize content into a logical hierarchy
-   - Include metadata such as dates, reference numbers, etc.
+def get_structured_extraction_instructions():
+    """Prompt guidance used WITH schema-enforced structured output.
 
-IMPORTANT: Return ONLY a single valid JSON object. No markdown, no backticks, no prose before or after.
-- All string values must be on one line — escape newlines as \\n, tabs as \\t.
-- Escape double quotes inside strings as \\".
-- No trailing commas before } or ].
-"""
-
-def get_json_formatting_instructions(output_schema=None):
+    Schema enforcement guarantees the response shape (valid JSON, allowed keys,
+    types) but does NOT make the model populate fields — unrequired fields may
+    be left empty, so the model can dump everything into one permissive string
+    field. This instruction tells the model to actually extract each field from
+    the document into its matching schema key. It deliberately omits the old
+    "return only valid JSON / escape quotes / no markdown" language, which is
+    now handled by constrained decoding.
     """
-    Get JSON formatting instructions based on whether a schema is provided
-    
-    Args:
-        output_schema: Optional JSON schema to conform to
-        
-    Returns:
-        str: The appropriate JSON formatting instructions
+    return (
+        "\n\nExtract the document's information into every applicable field of the "
+        "provided output structure. Map each piece of text to its most specific "
+        "matching field rather than placing everything into a single field. Leave a "
+        "field empty only when the document genuinely contains no value for it. "
+        "Preserve values exactly as they appear in the document."
+    )
+
+
+# Keywords unsupported by the strict structured-output paths of the providers
+# we target. Cerebras strict mode rejects pattern/format/min*/max*/array bounds;
+# Bedrock rejects numeric and length constraints. We strip the union of both so
+# a single sanitized schema is accepted by either provider.
+_UNSUPPORTED_SCHEMA_KEYWORDS = {
+    "pattern", "format",
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+    "minLength", "maxLength",
+    "minItems", "maxItems", "uniqueItems",
+    "minProperties", "maxProperties",
+    "default", "examples", "$comment", "readOnly", "writeOnly",
+}
+
+
+def sanitize_schema_for_structured_output(output_schema):
+    """Normalize a user-provided JSON schema into the common strict subset
+    accepted by both Bedrock Converse (outputConfig.textFormat) and Cerebras
+    (response_format json_schema strict).
+
+    Transformations:
+      - Parse a string schema into a dict (raises on invalid JSON).
+      - Require the root to be an object schema.
+      - Recursively set ``additionalProperties: false`` on every object.
+      - Strip keywords unsupported by the strict paths.
+
+    Raises ValueError if the schema is missing, unparseable, or not an object
+    schema. There is intentionally NO fallback: an unusable schema must fail
+    loudly rather than silently degrade to prompt-based extraction.
+
+    Returns the sanitized schema as a dict.
     """
-    if output_schema:
-        return (
-            f"\n\nFormat the output according to this JSON schema: {output_schema}\n"
-            "CRITICAL REQUIREMENTS:\n"
-            "- Return ONLY a single valid JSON object. No markdown, no backticks, no prose before or after.\n"
-            "- Use the EXACT field names from the schema above.\n"
-            "- All string values must be on a single line — escape newlines as \\\\n, tabs as \\\\t.\n"
-            "- Escape all double quotes inside strings as \\\\\".\n"
-            "- No trailing commas before } or ].\n"
-            "- Do not wrap values in {\"type\":..., \"value\":...} — put the plain value directly."
-        )
+    if output_schema is None:
+        raise ValueError("Structured output requires a JSON schema, but none was provided.")
+
+    if isinstance(output_schema, str):
+        text = output_schema.strip()
+        if not text:
+            raise ValueError("Structured output requires a non-empty JSON schema.")
+        try:
+            schema = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Output schema is not valid JSON: {e}") from e
+    elif isinstance(output_schema, dict):
+        schema = output_schema
     else:
-        return "\n\n" + JSON_TEMPLATE_NO_SCHEMA
+        raise ValueError(f"Unsupported schema type: {type(output_schema).__name__}")
+
+    if not isinstance(schema, dict):
+        raise ValueError("Output schema must be a JSON object.")
+
+    # A bare/generic placeholder like {"type": "object"} with no properties is
+    # not useful for enforcement — treat as unusable.
+    if schema.get("type") != "object":
+        raise ValueError('Structured output schema root must be {"type": "object"}.')
+    if not isinstance(schema.get("properties"), dict) or not schema["properties"]:
+        raise ValueError("Structured output schema must define at least one property.")
+
+    def _clean(node):
+        if isinstance(node, dict):
+            cleaned = {}
+            for k, v in node.items():
+                if k in _UNSUPPORTED_SCHEMA_KEYWORDS:
+                    continue
+                cleaned[k] = _clean(v)
+            # Enforce additionalProperties:false on every object node.
+            if cleaned.get("type") == "object" or "properties" in cleaned:
+                cleaned["additionalProperties"] = False
+            return cleaned
+        if isinstance(node, list):
+            return [_clean(v) for v in node]
+        return node
+
+    return _clean(schema)
+
 
 def get_prompt_for_document_type(document_type="generic"):
     """

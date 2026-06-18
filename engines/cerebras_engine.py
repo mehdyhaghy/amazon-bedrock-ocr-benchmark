@@ -1,7 +1,6 @@
 import time
 import json
 import base64
-import re
 import numpy as np
 from PIL import ImageDraw
 from typing import Dict, Any, Tuple, Optional
@@ -17,7 +16,8 @@ from shared.config import (
 )
 from shared.prompt_manager import (
     get_prompt_for_document_type,
-    get_json_formatting_instructions,
+    get_structured_extraction_instructions,
+    sanitize_schema_for_structured_output,
     OCR_SYSTEM_PROMPT,
 )
 
@@ -114,9 +114,23 @@ class CerebrasEngine(OCREngine):
             try:
                 client = self._get_client()
 
-                # Build prompt the same way the Bedrock engine does.
+                # Build prompt (document-type guidance + structured-extraction
+                # instruction; schema conformance is enforced via response_format).
                 prompt = get_prompt_for_document_type(document_type)
-                prompt += get_json_formatting_instructions(output_schema)
+                prompt += get_structured_extraction_instructions()
+
+                # Structured output: enforce the schema via Cerebras
+                # response_format json_schema with strict constrained decoding.
+                # A bad/missing schema raises here — no prompt-based fallback.
+                sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "ocr_extraction",
+                        "strict": True,
+                        "schema": sanitized_schema,
+                    },
+                }
 
                 # Per Cerebras best practices, place image content before the text.
                 messages = [
@@ -135,6 +149,7 @@ class CerebrasEngine(OCREngine):
                     "messages": messages,
                     "temperature": 0,
                     "max_completion_tokens": 32000 if effort_level else 4000,
+                    "response_format": response_format,
                 }
                 # reasoning_effort: None -> "none" (off). Otherwise pass through.
                 create_args["reasoning_effort"] = effort_level if effort_level else "none"
@@ -149,13 +164,8 @@ class CerebrasEngine(OCREngine):
                     logger.warning(f"Unexpected Cerebras response shape: {parse_err}")
                     extracted_text = ""
 
-                # Strip markdown code fences if present.
-                if extracted_text.startswith("```json"):
-                    extracted_text = extracted_text[7:]
-                if extracted_text.startswith("```"):
-                    extracted_text = extracted_text[3:]
-                if extracted_text.endswith("```"):
-                    extracted_text = extracted_text[:-3]
+                # Strict structured output returns raw JSON with no markdown
+                # fences. Keep only a defensive whitespace trim.
                 extracted_text = extracted_text.strip()
 
                 # Token usage — map Cerebras/OpenAI field names to the shared contract.
@@ -181,8 +191,11 @@ class CerebrasEngine(OCREngine):
                 draw.text((20, 20), f"Processed with Cerebras {model_id} ({width}x{height})", fill='#FF6B00')
                 annotated_image = np.array(annotated_img_copy)
 
-                # Parse / repair JSON (reuses the proven Bedrock logic).
-                structured_json = self._parse_json(extracted_text)
+                # Parse the JSON. Structured output (strict) guarantees
+                # schema-valid JSON, so parse strictly — any failure propagates
+                # to the outer except and surfaces as an error result (no lenient
+                # repair / no fallback).
+                structured_json = json.loads(extracted_text)
 
                 overall_process_time = time.time() - overall_start_time
                 logger.info(f"Cerebras total processing time: {overall_process_time:.2f} seconds")
@@ -253,75 +266,3 @@ class CerebrasEngine(OCREngine):
         if isinstance(image, str) and image.lower().endswith('.pdf'):
             return True
         return False
-
-    def _parse_json(self, extracted_text: str):
-        """Parse model output into JSON, repairing common model-introduced issues.
-
-        Ported from BedrockEngine to keep structured-output behavior consistent
-        across providers.
-        """
-        try:
-            structured_json = json.loads(extracted_text)
-        except json.JSONDecodeError:
-            structured_json = None
-            try:
-                start = extracted_text.find('{')
-                end = extracted_text.rfind('}')
-                if start != -1 and end > start:
-                    candidate = extracted_text[start:end + 1]
-                    candidate = (candidate
-                                 .replace('\ufeff', '')
-                                 .replace('：', ':')
-                                 .replace('\u201c', '"').replace('\u201d', '"')
-                                 .replace('\u2018', "'").replace('\u2019', "'"))
-                    candidate = re.sub(r',(\s*[}\]])', r'\1', candidate)
-                    try:
-                        structured_json = json.loads(candidate, strict=False)
-                    except json.JSONDecodeError:
-                        def _escape_ctrl_in_strings(s):
-                            out = []
-                            in_str = False
-                            i = 0
-                            while i < len(s):
-                                c = s[i]
-                                if c == '"' and (i == 0 or s[i - 1] != '\\'):
-                                    in_str = not in_str
-                                    out.append(c)
-                                elif in_str and c == '\n':
-                                    out.append('\\n')
-                                elif in_str and c == '\t':
-                                    out.append('\\t')
-                                elif in_str and c == '\r':
-                                    out.append('\\r')
-                                else:
-                                    out.append(c)
-                                i += 1
-                            return ''.join(out)
-                        try:
-                            structured_json = json.loads(_escape_ctrl_in_strings(candidate), strict=False)
-                        except json.JSONDecodeError:
-                            structured_json = {"text": extracted_text}
-                else:
-                    structured_json = {"text": extracted_text}
-            except json.JSONDecodeError:
-                structured_json = {"text": extracted_text}
-
-        # Unwrap schema-style responses (model echoes the schema structure).
-        if (isinstance(structured_json, dict)
-                and set(structured_json.keys()) <= {"type", "properties", "required", "items", "$schema"}
-                and isinstance(structured_json.get("properties"), dict)):
-            structured_json = structured_json["properties"]
-
-        # Unwrap per-field {"type":..., "value":...} wrappers.
-        def _unwrap_field_values(obj):
-            if isinstance(obj, dict):
-                if "value" in obj and set(obj.keys()) <= {"type", "value", "description", "format", "enum"}:
-                    return _unwrap_field_values(obj["value"])
-                if "type" in obj and set(obj.keys()) <= {"type", "description", "format", "enum"}:
-                    return None
-                return {k: _unwrap_field_values(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [_unwrap_field_values(v) for v in obj]
-            return obj
-
-        return _unwrap_field_values(structured_json)

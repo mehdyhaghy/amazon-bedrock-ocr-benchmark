@@ -67,7 +67,9 @@ def create_results_table():
     results_df = pd.DataFrame({
         "Engine": [""] * 5,
         "Tokens (in/out)": [""] * 5,
-        "Avg. Processing Time (s)": [""] * 5,
+        "Avg. Time (s)": [""] * 5,
+        "Min Time (s)": [""] * 5,
+        "Max Time (s)": [""] * 5,
         "Avg. Cost ($)": [""] * 5,
         "Total Cost ($)": [""] * 5,
         "Accuracy (%)": [""] * 5,
@@ -80,7 +82,7 @@ def create_results_table():
         wrap=True,
         row_count=(20, "fixed"),
         max_height=500,
-        column_widths=["200px", "140px", "150px", "130px", "130px", "110px"],
+        column_widths=["200px", "120px", "100px", "100px", "100px", "120px", "120px", "100px"],
         elem_id="results-dataframe",
         elem_classes="results-dataframe"
     )
@@ -108,6 +110,17 @@ def create_common_options_panel():
                 label="Enable Structured Output",
                 value=True,
                 info="Enable structured JSON output processing (uses additional Bedrock API calls)",
+                scale=1
+            )
+
+            call_count = gr.Number(
+                label="Calls per model",
+                value=5,
+                minimum=1,
+                maximum=20,
+                step=1,
+                precision=0,
+                info="How many times to call each model; processing time is reported as avg/min/max",
                 scale=1
             )
         
@@ -146,7 +159,7 @@ def create_common_options_panel():
             value="{\n  \"type\": \"object\"\n}"
         )
     
-    return panel, s3_bucket, document_type, enable_structured_output, output_schema, bedrock_model, bda_s3_bucket, use_bda_blueprint
+    return panel, s3_bucket, document_type, enable_structured_output, output_schema, bedrock_model, bda_s3_bucket, use_bda_blueprint, call_count
 
 
 def create_results_panel():

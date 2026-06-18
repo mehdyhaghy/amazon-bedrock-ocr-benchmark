@@ -60,6 +60,9 @@ def process_engine_result(engine_name, result, truth_data, truth_exists):
             "json": None, 
             "image": None, 
             "time": 0, 
+            "min_time": 0,
+            "max_time": 0,
+            "runs": 0,
             "status_html": STATUS_HTML["error"](engine_name, 0, "Invalid result format"),
             "accuracy": 0.0,
             "token_usage": None,
@@ -71,7 +74,18 @@ def process_engine_result(engine_name, result, truth_data, truth_exists):
     text = result.get('text', '')
     json_data = result.get('json', {})
     image_data = result.get('image')
-    process_time = result.get('process_time', 0)
+    # Aggregate timing across repeated calls when available.
+    time_samples = result.get('time_samples')
+    if time_samples:
+        avg_time = sum(time_samples) / len(time_samples)
+        min_time = min(time_samples)
+        max_time = max(time_samples)
+    else:
+        avg_time = result.get('process_time', 0)
+        min_time = avg_time
+        max_time = avg_time
+    process_time = avg_time  # status display uses the average
+    call_count = len(time_samples) if time_samples else 1
     token_usage = result.get('token_usage')
     
     # Process engine-specific fields
@@ -127,6 +141,9 @@ def process_engine_result(engine_name, result, truth_data, truth_exists):
         "json": json_data,
         "image": image_data,
         "time": process_time,
+        "min_time": min_time,
+        "max_time": max_time,
+        "runs": call_count,
         "status_html": status_html,
         "accuracy": accuracy,
         "token_usage": token_usage,
@@ -163,10 +180,15 @@ def create_results_dataframe(engine_results):
         token_usage = data.get("token_usage") or {}
         in_tok = token_usage.get("inputTokens", 0)
         out_tok = token_usage.get("outputTokens", 0)
+        avg_t = data.get("time", 0)
+        min_t = data.get("min_time", avg_t)
+        max_t = data.get("max_time", avg_t)
         result_row = {
             "Engine": engine_name,
             "Tokens (in/out)": f"{in_tok}/{out_tok}",
-            "Avg. Processing Time (s)": f"{data['time']:.3f}",
+            "Avg. Time (s)": f"{avg_t:.3f}",
+            "Min Time (s)": f"{min_t:.3f}",
+            "Max Time (s)": f"{max_t:.3f}",
             "Avg. Cost ($)": f"${data['cost']:.8f}",
             "Total Cost ($)": f"${data['cost']:.8f}",
             "Accuracy (%)": data["accuracy"]
@@ -175,10 +197,84 @@ def create_results_dataframe(engine_results):
     
     return pd.DataFrame(final_results)
 
+
+def build_incremental_results(engine_results, futures, total_start):
+    """Build the results DataFrame and row-click json_map from engines that have
+    completed so far, for incremental display during streaming.
+
+    Only engines that (a) were actually submitted (present in futures) and
+    (b) have produced output (text or json) are included, so partially-finished
+    runs show rows as each engine completes — including Cerebras variants.
+
+    Returns (results_df, json_map) where json_map is keyed in the same row order
+    as the DataFrame so row-click index lookups resolve correctly.
+    """
+    completed = {
+        name: data for name, data in engine_results.items()
+        if name in futures and (data.get("text") or data.get("json"))
+    }
+
+    results_df = create_results_dataframe(completed)
+
+    # Sort by processing time ascending so the fastest engines surface first,
+    # matching the final table ordering.
+    if not results_df.empty and "Avg. Time (s)" in results_df.columns:
+        results_df = results_df.sort_values(
+            by="Avg. Time (s)",
+            key=lambda c: c.astype(float),
+            ascending=True
+        ).reset_index(drop=True)
+
+    ordered_names = results_df["Engine"].tolist() if not results_df.empty else []
+    json_map = {
+        name: {
+            "json": completed[name].get("json"),
+            "text": completed[name].get("text", ""),
+            "image": completed[name].get("image"),
+            "cost_html": completed[name].get("cost_html", "<div></div>"),
+        }
+        for name in ordered_names if name in completed
+    }
+    return results_df, json_map
+
+
+def run_with_repeats(engine, image, options, call_count):
+    """Call engine.process_image up to `call_count` times and aggregate timing.
+
+    Runs the calls sequentially (the outer ThreadPoolExecutor already
+    parallelizes across engines/models, so repeats stay in-order per engine).
+    Returns the LAST successful result dict augmented with a `time_samples`
+    list of per-call process_time values. If a call errors, its result is
+    still returned and timing collection stops there.
+    """
+    try:
+        n = int(call_count)
+    except (TypeError, ValueError):
+        n = 1
+    n = max(1, n)
+
+    last_result = None
+    samples = []
+    for _ in range(n):
+        result = engine.process_image(image, options)
+        last_result = result
+        if isinstance(result, dict):
+            samples.append(result.get("process_time", 0) or 0)
+            # Stop repeating on error results — no point timing failures.
+            if result.get("operation_type") == "error":
+                break
+        else:
+            break
+
+    if isinstance(last_result, dict):
+        last_result = {**last_result, "time_samples": samples}
+    return last_result
+
+
 def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                              bedrock_model_name, bda_s3_bucket="", s3_bucket=DEFAULT_S3_BUCKET,
                              document_type="generic", enable_structured_output=True, output_schema="",
-                             use_bda_blueprint=False, image_name=None, use_cerebras=False):
+                             use_bda_blueprint=False, image_name=None, use_cerebras=False, call_count=5):
     """Process image with selected OCR engines in parallel"""
     total_start = time.time()
     default_result = {"text": "", "json": None, "image": None, "time": 0, "accuracy": 0, "cost": 0}
@@ -212,7 +308,9 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
     empty_df = pd.DataFrame({
         "Engine": [],
         "Tokens (in/out)": [],
-        "Avg. Processing Time (s)": [],
+        "Avg. Time (s)": [],
+        "Min Time (s)": [],
+        "Max Time (s)": [],
         "Avg. Cost ($)": [],
         "Total Cost ($)": [],
         "Accuracy (%)" : []
@@ -320,24 +418,28 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     for label_suffix, level in variants:
                         label = f"{display_name} ({label_suffix})"
                         futures[label] = executor.submit(
-                            bedrock_engine.process_image,
+                            run_with_repeats,
+                            bedrock_engine,
                             image,
                             {
                                 'model_id': m_id,
                                 'document_type': document_type,
                                 'output_schema': output_schema if output_schema else None,
                                 'effort_level': level
-                            }
+                            },
+                            call_count
                         )
                 else:
                     futures[display_name] = executor.submit(
-                        bedrock_engine.process_image,
+                        run_with_repeats,
+                        bedrock_engine,
                         image,
                         {
                             'model_id': m_id,
                             'document_type': document_type,
                             'output_schema': output_schema if output_schema else None
-                        }
+                        },
+                        call_count
                     )
         
         if use_cerebras:
@@ -345,13 +447,15 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
             # equivalent today, so each model runs as a single variant (reasoning off).
             for display_name, m_id in CEREBRAS_MODELS.items():
                 futures[display_name] = executor.submit(
-                    cerebras_engine.process_image,
+                    run_with_repeats,
+                    cerebras_engine,
                     image,
                     {
                         'model_id': m_id,
                         'document_type': document_type,
                         'output_schema': output_schema if output_schema else None
-                    }
+                    },
+                    call_count
                 )
 
         if use_bda:
@@ -387,9 +491,9 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                 # Create comparison view with available results
                 comparison_html = create_comparison_view_for_engines(truth_data, truth_exists, engine_results)
                 
-                # During streaming, keep the grid empty to avoid mid-process rendering issues.
-                # The final DataFrame is populated only on completion (see bottom of function).
-                results_df = empty_df
+                # Populate the grid incrementally so each engine (including Cerebras)
+                # appears as soon as it completes.
+                results_df, json_map = build_incremental_results(engine_results, futures, total_start)
                 
                 # Calculate global status — show partial progress while runs are in flight
                 total_time = time.time() - total_start
@@ -400,9 +504,6 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     global_status_html = STATUS_HTML["global_partial"](completed_count, total_count, total_time, total_cost)
                 else:
                     global_status_html = STATUS_HTML["global_completed"](total_time, total_cost)
-                
-                # Build JSON map for row-click display (engine_name -> json data)
-                json_map = {}
                 
                 # Update UI
                 yield [
@@ -443,8 +544,8 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                 # Create comparison with available results
                 comparison_html = create_comparison_view_for_engines(truth_data, truth_exists, engine_results)
                 
-                # Keep grid empty during streaming
-                results_df = empty_df
+                # Populate the grid incrementally with whatever has completed so far.
+                results_df, json_map = build_incremental_results(engine_results, futures, total_start)
                 
                 # Calculate global status
                 total_time = time.time() - total_start
@@ -455,9 +556,6 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                     global_status_html = STATUS_HTML["global_partial"](completed_count, total_count, total_time, total_cost)
                 else:
                     global_status_html = STATUS_HTML["global_completed"](total_time, total_cost)
-                
-                # Build JSON map for row-click display
-                json_map = {}
                 
                 # Update UI
                 yield [
@@ -499,9 +597,9 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
     })
     
     # Sort by processing time ascending (final results only)
-    if not results_df.empty and "Avg. Processing Time (s)" in results_df.columns:
+    if not results_df.empty and "Avg. Time (s)" in results_df.columns:
         results_df = results_df.sort_values(
-            by="Avg. Processing Time (s)",
+            by="Avg. Time (s)",
             key=lambda c: c.astype(float),
             ascending=True
         ).reset_index(drop=True)

@@ -12,7 +12,12 @@ from engines.base import OCREngine
 from shared.aws_client import get_aws_client
 from shared.image_utils import convert_to_bytes
 from shared.config import logger, API_COSTS, MAX_IMAGE_SIZE
-from shared.prompt_manager import get_prompt_for_document_type, get_json_formatting_instructions, OCR_SYSTEM_PROMPT
+from shared.prompt_manager import (
+    get_prompt_for_document_type,
+    get_structured_extraction_instructions,
+    sanitize_schema_for_structured_output,
+    OCR_SYSTEM_PROMPT,
+)
 
 def _build_thinking_params(model_id, effort_level):
     """Build reasoning params for the Converse API additionalModelRequestFields.
@@ -116,10 +121,26 @@ class BedrockEngine(OCREngine):
                 # Create Bedrock Runtime client
                 bedrock_runtime = get_aws_client('bedrock-runtime')
                 
-                # Get appropriate prompt based on document type
+                # Get appropriate prompt based on document type.
                 prompt = get_prompt_for_document_type(document_type)
-                prompt += get_json_formatting_instructions(output_schema)
+                prompt += get_structured_extraction_instructions()
                 system_prompt = OCR_SYSTEM_PROMPT
+
+                # Structured output: enforce the schema via Converse
+                # outputConfig.textFormat (json_schema). The schema must be a
+                # JSON string per the Bedrock API. A bad/missing schema raises
+                # here — no prompt-based fallback.
+                sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+                text_format_config = {
+                    "type": "json_schema",
+                    "structure": {
+                        "jsonSchema": {
+                            "schema": json.dumps(sanitized_schema),
+                            "name": "ocr_extraction",
+                            "description": "Structured OCR extraction conforming to the provided schema",
+                        }
+                    }
+                }
                     
                 # Create request payload based on file type
                 if is_pdf:
@@ -152,6 +173,7 @@ class BedrockEngine(OCREngine):
                     }
                     if reasoning_config:
                         converse_args["additionalModelRequestFields"] = reasoning_config
+                    converse_args["outputConfig"] = {"textFormat": text_format_config}
                     
                     response = bedrock_runtime.converse(**converse_args)
                     
@@ -209,6 +231,7 @@ class BedrockEngine(OCREngine):
                     }
                     if reasoning_config:
                         converse_args["additionalModelRequestFields"] = reasoning_config
+                    converse_args["outputConfig"] = {"textFormat": text_format_config}
                     
                     response = bedrock_runtime.converse(**converse_args)
                     
@@ -279,84 +302,10 @@ class BedrockEngine(OCREngine):
                     # Convert to numpy array
                     annotated_image = np.array(annotated_img_copy)
                 
-                # Try to parse the JSON
-                structured_json = None
-                try:
-                    structured_json = json.loads(extracted_text)
-                except json.JSONDecodeError:
-                    # Try to extract JSON from mixed content (find first { ... last })
-                    try:
-                        start = extracted_text.find('{')
-                        end = extracted_text.rfind('}')
-                        if start != -1 and end > start:
-                            candidate = extracted_text[start:end + 1]
-                            # Fix common model-introduced JSON issues:
-                            # Chinese colons, BOMs, smart quotes, unescaped newlines in strings
-                            candidate = (candidate
-                                         .replace('\ufeff', '')
-                                         .replace('：', ':')
-                                         .replace('\u201c', '"').replace('\u201d', '"')
-                                         .replace('\u2018', "'").replace('\u2019', "'"))
-                            # Remove trailing commas before } or ] (invalid in JSON but some
-                            # models produce them)
-                            import re
-                            candidate = re.sub(r',(\s*[}\]])', r'\1', candidate)
-                            try:
-                                structured_json = json.loads(candidate, strict=False)
-                            except json.JSONDecodeError:
-                                # Last resort: replace raw control chars in string regions
-                                # by escaping newlines/tabs that appear inside quoted strings
-                                def _escape_ctrl_in_strings(s):
-                                    # Walk through and escape newlines/tabs inside "..." regions
-                                    out = []
-                                    in_str = False
-                                    i = 0
-                                    while i < len(s):
-                                        c = s[i]
-                                        if c == '"' and (i == 0 or s[i - 1] != '\\'):
-                                            in_str = not in_str
-                                            out.append(c)
-                                        elif in_str and c == '\n':
-                                            out.append('\\n')
-                                        elif in_str and c == '\t':
-                                            out.append('\\t')
-                                        elif in_str and c == '\r':
-                                            out.append('\\r')
-                                        else:
-                                            out.append(c)
-                                        i += 1
-                                    return ''.join(out)
-                                try:
-                                    structured_json = json.loads(_escape_ctrl_in_strings(candidate), strict=False)
-                                except json.JSONDecodeError:
-                                    structured_json = {"text": extracted_text}
-                        else:
-                            structured_json = {"text": extracted_text}
-                    except json.JSONDecodeError:
-                        structured_json = {"text": extracted_text}
-                
-                # Unwrap schema-style responses: when the model echoes the schema structure
-                # and nests the actual extracted values inside "properties"
-                if (isinstance(structured_json, dict)
-                        and set(structured_json.keys()) <= {"type", "properties", "required", "items", "$schema"}
-                        and isinstance(structured_json.get("properties"), dict)):
-                    structured_json = structured_json["properties"]
-                
-                # Unwrap per-field {"type":"string","value":...} wrappers that some
-                # models (e.g. Llama 4) produce when given a JSON schema prompt.
-                def _unwrap_field_values(obj):
-                    if isinstance(obj, dict):
-                        # Schema-field wrapper with a value: return the value
-                        if "value" in obj and set(obj.keys()) <= {"type", "value", "description", "format", "enum"}:
-                            return _unwrap_field_values(obj["value"])
-                        # Schema-field wrapper without value: treat as empty/None
-                        if "type" in obj and set(obj.keys()) <= {"type", "description", "format", "enum"}:
-                            return None
-                        return {k: _unwrap_field_values(v) for k, v in obj.items()}
-                    if isinstance(obj, list):
-                        return [_unwrap_field_values(v) for v in obj]
-                    return obj
-                structured_json = _unwrap_field_values(structured_json)
+                # Parse the JSON. Structured output guarantees schema-valid JSON,
+                # so parse strictly — any failure propagates to the outer except
+                # and surfaces as an error result (no lenient repair / no fallback).
+                structured_json = json.loads(extracted_text)
                 
                 logger.info(f"Bedrock processing completed in {timing_ctx.process_time:.2f} seconds")
                 overall_process_time = time.time() - overall_start_time
