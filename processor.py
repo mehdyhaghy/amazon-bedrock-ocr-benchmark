@@ -4,7 +4,7 @@ import pandas as pd
 import os
 
 # Import from reorganized modules
-from shared.config import logger, BEDROCK_MODELS, CEREBRAS_MODELS, STATUS_HTML, POSTPROCESSING_MODEL, EFFORT_LEVELS, DEFAULT_S3_BUCKET
+from shared.config import logger, BEDROCK_MODELS, CEREBRAS_MODELS, STATUS_HTML, POSTPROCESSING_MODEL, EFFORT_LEVELS, DEFAULT_S3_BUCKET, RESULTS_TABLE_ROWS
 from engines.textract_engine import TextractEngine
 from engines.bedrock_engine import BedrockEngine
 from engines.bda_engine import BDAEngine
@@ -132,7 +132,38 @@ def process_engine_result(engine_name, result, truth_data, truth_exists):
         accuracy_result = calculate_accuracy(json_data, truth_data)
         accuracy = accuracy_result["total_accuracy"] if isinstance(accuracy_result, dict) else accuracy_result
         logger.info(f"{engine_name} accuracy: {accuracy}%")
-        
+
+        # Diagnostic: when an engine returns JSON but scores very low accuracy,
+        # the usual cause is a key/shape mismatch (the model emitted a different
+        # structure than the ground truth — e.g. nested vs flat, different field
+        # names). Log the extracted vs truth top-level keys so a 0%/low row can
+        # be diagnosed without re-running.
+        try:
+            if accuracy <= 25:
+                extracted_keys = sorted(json_data.keys()) if isinstance(json_data, dict) else f"<non-dict: {type(json_data).__name__}>"
+                truth_keys = sorted(truth_data.keys()) if isinstance(truth_data, dict) else f"<non-dict: {type(truth_data).__name__}>"
+                logger.warning(
+                    f"Low accuracy ({accuracy}%) for {engine_name}: "
+                    f"extracted_keys={extracted_keys} truth_keys={truth_keys}"
+                )
+                from shared.response_logger import log_engine_response
+                log_engine_response(
+                    engine_name,
+                    model_id=result.get('model_id', ''),
+                    status="low_accuracy",
+                    token_usage=token_usage,
+                    raw_text=text,
+                    error=f"accuracy={accuracy}%",
+                    extra={
+                        "accuracy": accuracy,
+                        "extracted_keys": extracted_keys,
+                        "truth_keys": truth_keys,
+                        "extracted_json": json_data if isinstance(json_data, dict) else str(json_data),
+                    },
+                )
+        except Exception as diag_err:
+            logger.debug(f"Accuracy diagnostic logging failed for {engine_name}: {diag_err}")
+
         # Add accuracy to status
         status_html = status_html.replace("</div>", f" | Accuracy: {accuracy}%</div>")
     
@@ -183,14 +214,20 @@ def create_results_dataframe(engine_results):
         avg_t = data.get("time", 0)
         min_t = data.get("min_time", avg_t)
         max_t = data.get("max_time", avg_t)
+        # `cost` is the per-call cost (derived from a single call's token usage).
+        # Avg. Cost is therefore the per-call cost, and Total Cost is that
+        # multiplied by the number of calls made for this engine.
+        per_call_cost = data.get("cost", 0)
+        runs = data.get("runs", 1) or 1
+        total_cost = per_call_cost * runs
         result_row = {
             "Engine": engine_name,
-            "Tokens (in/out)": f"{in_tok}/{out_tok}",
-            "Avg. Time (s)": f"{avg_t:.3f}",
-            "Min Time (s)": f"{min_t:.3f}",
-            "Max Time (s)": f"{max_t:.3f}",
-            "Avg. Cost ($)": f"${data['cost']:.8f}",
-            "Total Cost ($)": f"${data['cost']:.8f}",
+            "Tokens\n(in/out)": f"{in_tok}/{out_tok}",
+            "Avg.\nTime(s)": f"{avg_t:.2f}",
+            "Min\nTime(s)": f"{min_t:.2f}",
+            "Max\nTime(s)": f"{max_t:.2f}",
+            "Avg. Cost ($)": f"${per_call_cost:.8f}",
+            "Total Cost ($)": f"${total_cost:.8f}",
             "Accuracy (%)": data["accuracy"]
         }
         final_results.append(result_row)
@@ -216,14 +253,33 @@ def build_incremental_results(engine_results, futures, total_start):
 
     results_df = create_results_dataframe(completed)
 
-    # Sort by processing time ascending so the fastest engines surface first,
-    # matching the final table ordering.
-    if not results_df.empty and "Avg. Time (s)" in results_df.columns:
+    # Sort by processing time ascending so the fastest engines surface first.
+    # Engines that produced 0 tokens (failed/empty extractions) are pushed to
+    # the bottom regardless of their (often misleadingly fast) timing, so valid
+    # results surface first. Sorting happens on real rows only — blank padding
+    # rows are appended afterwards so they never float to the top.
+    if not results_df.empty and "Avg.\nTime(s)" in results_df.columns:
+        def _avg_time(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float("inf")
+
+        def _is_zero_token(value):
+            # "Tokens\n(in/out)" is formatted as "<in>/<out>"; treat 0/0 as failed.
+            try:
+                in_tok, out_tok = str(value).split("/")
+                return int(in_tok) == 0 and int(out_tok) == 0
+            except (TypeError, ValueError):
+                return False
+
+        results_df["__zero_token"] = results_df["Tokens\n(in/out)"].map(_is_zero_token)
+        results_df["__avg_time"] = results_df["Avg.\nTime(s)"].map(_avg_time)
         results_df = results_df.sort_values(
-            by="Avg. Time (s)",
-            key=lambda c: c.astype(float),
-            ascending=True
-        ).reset_index(drop=True)
+            by=["__zero_token", "__avg_time"],
+            ascending=[True, True],
+            kind="stable",
+        ).drop(columns=["__zero_token", "__avg_time"]).reset_index(drop=True)
 
     ordered_names = results_df["Engine"].tolist() if not results_df.empty else []
     json_map = {
@@ -235,6 +291,18 @@ def build_incremental_results(engine_results, futures, total_start):
         }
         for name in ordered_names if name in completed
     }
+
+    # Pad to a constant row count. Gradio 6.x only renders streaming Dataframe
+    # updates correctly when the number of rows stays the same across yields; a
+    # changing row count makes it render only the latest single-row delta. The
+    # blank padding rows keep the grid height/row-count stable. json_map is NOT
+    # padded, so row-click lookups still resolve only real engine rows.
+    real_rows = len(results_df)
+    if real_rows < RESULTS_TABLE_ROWS:
+        pad = RESULTS_TABLE_ROWS - real_rows
+        blank_df = pd.DataFrame({col: [""] * pad for col in results_df.columns})
+        results_df = pd.concat([results_df, blank_df], ignore_index=True)
+
     return results_df, json_map
 
 
@@ -307,10 +375,10 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
     # Empty results for error cases
     empty_df = pd.DataFrame({
         "Engine": [],
-        "Tokens (in/out)": [],
-        "Avg. Time (s)": [],
-        "Min Time (s)": [],
-        "Max Time (s)": [],
+        "Tokens\n(in/out)": [],
+        "Avg.\nTime(s)": [],
+        "Min\nTime(s)": [],
+        "Max\nTime(s)": [],
         "Avg. Cost ($)": [],
         "Total Cost ($)": [],
         "Accuracy (%)" : []
@@ -399,12 +467,14 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
         
         if use_textract:
             futures['Textract'] = executor.submit(
-                textract_engine.process_image, 
-                image, 
+                run_with_repeats,
+                textract_engine,
+                image,
                 {
                     'output_schema': output_schema if enable_structured_output else None,
                     's3_bucket': s3_bucket
-                }
+                },
+                call_count
             )
         
         if use_bedrock:
@@ -425,7 +495,8 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                                 'model_id': m_id,
                                 'document_type': document_type,
                                 'output_schema': output_schema if output_schema else None,
-                                'effort_level': level
+                                'effort_level': level,
+                                'engine_label': label
                             },
                             call_count
                         )
@@ -437,7 +508,8 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
                         {
                             'model_id': m_id,
                             'document_type': document_type,
-                            'output_schema': output_schema if output_schema else None
+                            'output_schema': output_schema if output_schema else None,
+                            'engine_label': display_name
                         },
                         call_count
                     )
@@ -460,14 +532,16 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
 
         if use_bda:
             futures['BDA'] = executor.submit(
-                bda_engine.process_image,
-                image, 
+                run_with_repeats,
+                bda_engine,
+                image,
                 {
                     's3_bucket': bda_s3_bucket,
                     'document_type': document_type,
                     'output_schema': output_schema if enable_structured_output and output_schema else None,
                     'use_blueprint': use_bda_blueprint
-                }
+                },
+                call_count
             )
         
         # Process results as they complete
@@ -589,33 +663,13 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
     
     # Final comparison view
     comparison_html = create_comparison_view_for_engines(truth_data, truth_exists, engine_results)
-    
-    # Final results
-    results_df = create_results_dataframe({
-        name: data for name, data in engine_results.items() 
-        if name in futures.keys()  # Only include selected engines
-    })
-    
-    # Sort by processing time ascending (final results only)
-    if not results_df.empty and "Avg. Time (s)" in results_df.columns:
-        results_df = results_df.sort_values(
-            by="Avg. Time (s)",
-            key=lambda c: c.astype(float),
-            ascending=True
-        ).reset_index(drop=True)
-    
-    # Build final JSON map in the same order as the sorted DataFrame so that
-    # row-click index lookups resolve to the correct engine variant.
-    ordered_names = results_df["Engine"].tolist() if not results_df.empty else []
-    final_json_map = {
-        name: {
-            "json": engine_results[name].get("json"),
-            "text": engine_results[name].get("text", ""),
-            "image": engine_results[name].get("image"),
-            "cost_html": engine_results[name].get("cost_html", "<div></div>"),
-        }
-        for name in ordered_names if name in engine_results
-    }
+
+    # Final results. Reuse build_incremental_results so the final table uses the
+    # SAME ordering rules as the streamed updates: sort by avg time ascending,
+    # push 0-token (failed) rows to the bottom, and pad to a fixed row count.
+    # (Previously this block re-sorted on a mis-named "Avg. Time (s)" column that
+    # never matched, leaving the final table unsorted.)
+    results_df, final_json_map = build_incremental_results(engine_results, futures, total_start)
     
     # Final status
     total_time = time.time() - total_start

@@ -32,12 +32,16 @@ shared/local_settings.py
 
 # Project outputs
 results/
+logs/
 generated-diagrams/
 *.log
 
 # Gradio
 .gradio/
 flagged/
+
+# Playwright MCP debug logs
+.playwright-mcp/
 
 # Jupyter
 .ipynb_checkpoints/

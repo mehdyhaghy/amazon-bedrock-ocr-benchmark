@@ -6,8 +6,10 @@ from functools import lru_cache
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Long timeout for reasoning/thinking models (up to 60 min per AWS Nova docs)
-_BEDROCK_CONFIG = Config(read_timeout=120, connect_timeout=60, retries={"max_attempts": 0})
+# Long timeout for reasoning/thinking models. Reasoning variants (Claude
+# Sonnet/Haiku with thinking budgets, Gemma 12B) and slow-region models
+# routinely exceed 2 min; 120s was killing them mid-generation (0/0 results).
+_BEDROCK_CONFIG = Config(read_timeout=300, connect_timeout=60, retries={"max_attempts": 0})
 
 @lru_cache(maxsize=16)
 def get_aws_client(service_name, region=None, endpoint_url=None):

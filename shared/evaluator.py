@@ -4,6 +4,11 @@ import json
 from typing import Dict, Any, Union, List, Tuple
 from shared.config import logger
 
+# Fields excluded from accuracy scoring. These are not exact-match fields
+# (e.g. document_type is a classification/prompt hint, not extracted text),
+# so including them would distort the accuracy metric.
+ACCURACY_EXCLUDED_FIELDS = {"document_type"}
+
 def load_truth_data(image_name: str) -> Tuple[Dict[str, Any], bool]:
     """
     Load ground truth data for a given image name
@@ -118,7 +123,11 @@ def compare_json_recursive(truth_obj, extracted_obj, path, result):
         # Process dictionary fields
         for key, truth_val in truth_obj.items():
             current_path = f"{path}.{key}" if path else key
-            
+
+            # Skip fields excluded from accuracy scoring (top-level only)
+            if not path and key in ACCURACY_EXCLUDED_FIELDS:
+                continue
+
             # Skip null values in truth
             if truth_val in [None, "", "null", "None"]:
                 continue
@@ -304,7 +313,11 @@ def add_missing_fields(obj, base_path, result):
         for key, value in obj.items():
             if value in [None, "", "null", "None"]:
                 continue
-                
+
+            # Skip fields excluded from accuracy scoring (top-level only)
+            if not base_path and key in ACCURACY_EXCLUDED_FIELDS:
+                continue
+
             current_path = f"{base_path}.{key}"
             
             if isinstance(value, (dict, list)):
@@ -337,27 +350,67 @@ def add_missing_fields(obj, base_path, result):
                 })
 
 
+def _normalize_for_compare(value):
+    """Normalize a scalar value for tolerant string comparison.
+
+    OCR/model output frequently differs from ground truth only in cosmetic
+    formatting — punctuation and whitespace — while the meaningful content
+    (digits and letters) is identical. Examples that SHOULD match:
+        "(920)-555-0101"  vs  "(920)555-0101"   (phone)
+        "11-2234-10190"   vs  "11 2234 10190"   (ids)
+        "JOHN  DOE"       vs  "John Doe"        (spacing/case)
+
+    Strategy: lowercase, then drop everything except alphanumeric characters.
+    This preserves all the significant content (letters/digits) so genuinely
+    different values still differ, but ignores separators like - ( ) . , / and
+    whitespace. We deliberately keep alphanumerics only rather than trying to
+    special-case each separator, so it generalizes across phones, IDs, codes,
+    and names.
+    """
+    s = str(value).lower()
+    return "".join(ch for ch in s if ch.isalnum())
+
+
 def compare_values(truth_val, extracted_val):
     """
-    Compare two scalar values with type handling
-    
+    Compare two scalar values with type handling.
+
+    Matching is tolerant of cosmetic formatting differences (punctuation and
+    whitespace) so that values like "(920)-555-0101" and "(920)555-0101" are
+    treated as equal. Genuine content differences are still flagged.
+
     Args:
         truth_val: Expected value
         extracted_val: Extracted value to compare
-        
+
     Returns:
         Boolean indicating match status
     """
     # Handle None
     if truth_val is None:
         return extracted_val is None
-    
+
+    if extracted_val is None:
+        return False
+
     # Handle numeric types
     if isinstance(truth_val, (int, float)) and isinstance(extracted_val, (int, float)):
         return abs(float(truth_val) - float(extracted_val)) < 0.001
-    
-    # String comparison (case-insensitive)
-    return str(truth_val).lower() == str(extracted_val).lower()
+
+    # Fast path: exact case-insensitive string match.
+    if str(truth_val).lower() == str(extracted_val).lower():
+        return True
+
+    # Tolerant path: ignore punctuation/whitespace differences (e.g. phone
+    # number or ID formatting) by comparing alphanumeric content only. Guard
+    # against empty normalizations matching (e.g. a value that is all
+    # punctuation) so two "empty" normals don't falsely match.
+    norm_truth = _normalize_for_compare(truth_val)
+    norm_extracted = _normalize_for_compare(extracted_val)
+    if norm_truth and norm_truth == norm_extracted:
+        return True
+
+    return False
 
 def count_fields(obj):
     """

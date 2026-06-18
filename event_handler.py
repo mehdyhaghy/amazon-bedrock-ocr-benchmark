@@ -143,7 +143,7 @@ def setup_event_handlers(
             use_textract, use_bedrock, use_bda,
             bedrock_model, bda_s3_bucket, s3_bucket,
             document_type, enable_structured_output, output_schema, use_bda_blueprint,
-            use_cerebras
+            use_cerebras, call_count
         ],
         outputs=[global_status, results_table]
     )

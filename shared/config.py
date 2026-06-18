@@ -2,9 +2,34 @@ import logging
 import os
 import gradio as gr
 
-# Configure logging
+# Directory for troubleshooting logs (app log + per-engine response dumps).
+# Lives at the repo root so it's easy to find; gitignored.
+LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+# Per-engine raw response dumps go in a subfolder so the top-level logs/ stays
+# readable (app.log + one file per failed/successful call when enabled).
+RESPONSE_LOG_DIR = os.path.join(LOGS_DIR, "responses")
+os.makedirs(RESPONSE_LOG_DIR, exist_ok=True)
+
+# Configure logging: INFO to console (basicConfig) AND to logs/app.log so a full
+# trace is captured for troubleshooting the 0-token / truncation / parse cases.
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+if not any(
+    isinstance(h, logging.FileHandler)
+    and getattr(h, "baseFilename", "") == os.path.join(LOGS_DIR, "app.log")
+    for h in logger.handlers
+):
+    _file_handler = logging.FileHandler(os.path.join(LOGS_DIR, "app.log"), encoding="utf-8")
+    _file_handler.setLevel(logging.INFO)
+    _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logger.addHandler(_file_handler)
+    # Don't double-propagate to the root logger's handlers (basicConfig already
+    # prints to console); keep the file handler dedicated to this logger.
+    logger.propagate = True
 
 # Image size constants
 MAX_IMAGE_SIZE = 5 * 1024 * 1024 - 100000  # 5MB minus buffer for Bedrock
@@ -70,8 +95,133 @@ EFFORT_LEVELS = {
     "us.anthropic.claude-opus-4-8": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-sonnet-4-6": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": ("budget", [1024, 4096, 16384]),
-    "us.amazon.nova-2-lite-v1:0": ("nova", ["low", "medium"]),
+    "us.amazon.nova-2-lite-v1:0": ("nova", ["low"]),
 }
+
+# Bedrock models that do NOT support the Converse `outputConfig.textFormat`
+# (json_schema) structured-output field. Verified via live converse() probe
+# against this account/region: these return either
+#   ValidationException: This model doesn't support the outputConfig field.
+# or (Opus 4.8) output_config.format: Extra inputs are not permitted.
+#
+# Default path for every model is Converse + outputConfig (strict schema).
+# For the models listed here we instead make a plain Converse call (no
+# outputConfig) using the SAME prompt + structured-extraction instructions,
+# then run an output parsing/formatting step to recover schema-shaped JSON.
+# This is a capability gate (the model rejects the API field), not a
+# bad-JSON fallback for models that do support structured output.
+#
+# Coverage notes (this account/region, verified live):
+#   - Pixtral Large and Gemma 3 4B reject Converse outputConfig but DO support
+#     the invoke_model `response_format` path. We still route them through the
+#     parsing step here to keep a single Converse code path.
+#   - Claude Opus 4.8 rejects structured output on ALL paths (Converse,
+#     InvokeModel Anthropic output_config.format, open-weight response_format).
+#     AWS docs list structured-output support only through Opus 4.6.
+#   - Claude Sonnet 4.6 and Haiku 4.5 ACCEPT the outputConfig field but their
+#     constrained-decoding grammar compiler cannot handle realistic OCR schemas
+#     in this region: Sonnet fails fast with "Schema is too complex" (~5s) and
+#     Haiku hangs ~180s then fails with "Grammar compilation timed out" — for
+#     both the small insurance_card schema AND the driver_license schema.
+#     Routing them to the prompt-based path avoids the grammar step entirely
+#     (and the wasted 180s timeout per call). The bedrock_engine retry covers
+#     any other model that hits these errors unexpectedly.
+MODELS_WITHOUT_STRUCTURED_OUTPUT = {
+    "us.anthropic.claude-opus-4-8",
+    "us.anthropic.claude-sonnet-4-6",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "us.amazon.nova-2-lite-v1:0",
+    "us.mistral.pixtral-large-2502-v1:0",
+    # Mistral Large 3 ACCEPTS the Converse outputConfig field but constrained
+    # decoding returns an EMPTY object ("{}", 2 output tokens) instead of
+    # populated data — verified live against insurance_card (0% accuracy).
+    # The prompt-based path extracts fields correctly, so route it there.
+    "mistral.mistral-large-3-675b-instruct",
+    "us.meta.llama4-maverick-17b-instruct-v1:0",
+    "us.meta.llama4-scout-17b-instruct-v1:0",
+    "google.gemma-3-4b-it",
+    # Gemma 3 12B/27B ACCEPT the Converse outputConfig field but constrained
+    # decoding is unreliable for them on this account/region: it either runs
+    # away to the 8000-token output cap without closing the JSON (stop_reason
+    # max_tokens -> 0/0 rows) or terminates early with a near-empty object
+    # (~3/18 fields, ~16% accuracy). Verified live against the insurance_card
+    # sample: constrained = 2/3 runs truncated + 16.7% on the survivor, while
+    # the prompt-based path scored 94-100% across 3 runs with no truncation.
+    # Route them to the prompt-based path like Gemma 3 4B.
+    "google.gemma-3-12b-it",
+    "google.gemma-3-27b-it",
+}
+
+# Number of fixed rows reserved in the results Dataframe. Gradio 6.x only
+# renders streaming Dataframe updates correctly when the row count is constant
+# across generator yields, so we fix the grid size and pad incremental results
+# to this length. Must be >= the max number of engine variants produced by a
+# run (8 Bedrock models with effort expansions + Cerebras + Textract + BDA).
+RESULTS_TABLE_ROWS = 30
+
+# Max output tokens for standard (non-reasoning) generation. OCR of dense
+# documents (full forms, large tables) can produce sizeable JSON, and the
+# prompt-based fallback path is more verbose than constrained decoding — so we
+# give generous headroom to avoid mid-JSON truncation. You only pay for tokens
+# actually generated. Reasoning/effort calls use a higher cap (see engines).
+#
+# NOTE: this is the DESIRED cap. Bedrock enforces a per-model output ceiling and
+# rejects requests that exceed it (ValidationException), so the engine clamps
+# this to each model's documented max via resolve_max_output_tokens(). 12K gives
+# comfortable headroom over the old borderline 8K for every model that allows it
+# (Pixtral 16K, Mistral/Nova/Claude 32K+); Llama 4 and Gemma 3 are hard-capped at
+# 8K by Bedrock and stay clamped there (12K would be rejected for them).
+MAX_OUTPUT_TOKENS = 12000
+
+# Higher cap used when reasoning/effort is enabled (thinking tokens count toward
+# the budget, so the limit must accommodate both reasoning and the final JSON).
+# Also clamped per-model by resolve_max_output_tokens().
+MAX_OUTPUT_TOKENS_REASONING = 32000
+
+# Per-model maximum output tokens, from the Amazon Bedrock model cards
+# (verified live, this account/region). Requests exceeding a model's ceiling are
+# rejected with a ValidationException, so the desired cap above is clamped to
+# these values per model. Keys are matched as substrings against the model_id,
+# so cross-region inference profiles (e.g. "us.anthropic.claude-sonnet-4-6")
+# resolve to the same ceiling as the base model id. Models not listed fall back
+# to MODEL_MAX_OUTPUT_TOKENS_DEFAULT.
+#   Claude 4.x / Nova 2 Lite : 64K     Mistral Large 3 : 32K
+#   Pixtral Large            : 16K     Llama 4 (both)  : 8K
+#   Gemma 3 (all sizes)      : 8K
+MODEL_MAX_OUTPUT_TOKENS = {
+    "claude-opus-4": 64000,
+    "claude-sonnet-4": 64000,
+    "claude-haiku-4": 64000,
+    "nova-2-lite": 64000,
+    "mistral-large-3": 32000,
+    "pixtral-large": 16000,
+    "llama4-maverick": 8000,
+    "llama4-scout": 8000,
+    "gemma-3": 8000,
+    # Cerebras-hosted Gemma 4 (external provider, not Bedrock). Supports a large
+    # output window; cap generously since OCR JSON stays well under this.
+    "gemma-4-31b-trial": 32000,
+}
+# Conservative default for any model not explicitly listed above. 8K is the
+# lowest ceiling among current models, so it is always a valid request.
+MODEL_MAX_OUTPUT_TOKENS_DEFAULT = 8000
+
+
+def resolve_max_output_tokens(model_id, desired):
+    """Clamp a desired max-output-tokens value to the given model's documented
+    ceiling so Bedrock never rejects the request for exceeding the model limit.
+
+    Matches MODEL_MAX_OUTPUT_TOKENS keys as substrings of model_id (handles
+    cross-region inference profile prefixes like "us.", "eu."). Returns
+    min(desired, model_ceiling); unknown models use MODEL_MAX_OUTPUT_TOKENS_DEFAULT.
+    """
+    ceiling = MODEL_MAX_OUTPUT_TOKENS_DEFAULT
+    if model_id:
+        for key, limit in MODEL_MAX_OUTPUT_TOKENS.items():
+            if key in model_id:
+                ceiling = limit
+                break
+    return min(desired, ceiling)
 
 # API cost information - Only for APIs currently in use
 API_COSTS = {

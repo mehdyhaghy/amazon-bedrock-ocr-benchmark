@@ -142,6 +142,118 @@ def sanitize_schema_for_structured_output(output_schema):
     return _clean(schema)
 
 
+def get_json_only_instructions(output_schema=None):
+    """Prompt guidance for the capability-gated path (models that reject the
+    Converse `outputConfig` field).
+
+    Without constrained decoding these models tend to return markdown prose
+    instead of JSON, so — unlike get_structured_extraction_instructions(), which
+    assumes the schema is enforced by the API — this explicitly instructs the
+    model to emit a single raw JSON object conforming to the schema. The base
+    document-type prompt and OCR system prompt are unchanged, so the two paths
+    stay as similar as possible; only this trailing instruction differs.
+    """
+    instr = (
+        "\n\nExtract the document's information into every applicable field of the "
+        "provided JSON schema. Map each piece of text to its most specific matching "
+        "field rather than placing everything into one field. Leave a field empty "
+        "only when the document genuinely contains no value for it. Preserve values "
+        "exactly as they appear.\n\n"
+        "Return ONLY a single raw JSON object that conforms to the schema. Do not "
+        "include any explanation, prose, headings, or markdown code fences — output "
+        "must start with '{' and end with '}'."
+    )
+    if output_schema:
+        schema_text = output_schema if isinstance(output_schema, str) else json.dumps(output_schema)
+        instr += f"\n\nJSON schema:\n{schema_text}"
+    return instr
+
+
+def parse_structured_output_fallback(raw_text):
+    """Tolerant JSON extraction for models that do NOT support Converse
+    structured output (outputConfig).
+
+    The default path uses constrained decoding and a strict json.loads. This
+    helper is ONLY used on the capability-gated path where the model produced
+    free-form text guided by the prompt. It recovers a JSON object from common
+    wrappers the model may add:
+      - markdown code fences (```json ... ``` or ``` ... ```)
+      - leading/trailing prose around the JSON object
+      - a trailing comma before a closing brace/bracket
+
+    It does NOT attempt aggressive repair. If a valid JSON object cannot be
+    recovered it raises ValueError so the caller surfaces an error result
+    (no silent degradation).
+
+    Returns the parsed dict.
+    """
+    if not raw_text or not raw_text.strip():
+        raise ValueError("Empty response; no JSON to parse.")
+
+    text = raw_text.strip()
+
+    # Strip a single leading/trailing markdown code fence if present.
+    if text.startswith("```"):
+        # remove opening fence line (``` or ```json)
+        newline = text.find("\n")
+        if newline != -1:
+            text = text[newline + 1:]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+        text = text.strip()
+
+    # First, try a direct parse.
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back to extracting the outermost {...} object via brace matching.
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("No JSON object found in model response.")
+
+    depth = 0
+    in_string = False
+    escape = False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+
+    if end == -1:
+        raise ValueError("Unbalanced JSON object in model response.")
+
+    candidate = text[start:end + 1]
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        # Last permitted normalization: remove trailing commas before } or ].
+        import re as _re
+        candidate2 = _re.sub(r",(\s*[}\]])", r"\1", candidate)
+        try:
+            return json.loads(candidate2)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Could not parse JSON from model response: {e}") from e
+
+
 def get_prompt_for_document_type(document_type="generic"):
     """
     Get appropriate user prompt based on document type
@@ -153,6 +265,45 @@ def get_prompt_for_document_type(document_type="generic"):
         str: The appropriate user prompt
     """
     return DOCUMENT_TYPE_PROMPT_MAP.get(document_type.lower(), DOCUMENT_TYPE_PROMPT_MAP["generic"])
+
+def _unwrap_schema_envelope(data):
+    """Unwrap a JSON Schema envelope that some models emit instead of plain data.
+
+    When asked to "format output according to this JSON schema", the post-
+    processing model occasionally echoes the SCHEMA shape — e.g.
+    {"type": "object", "properties": {<actual field values>}} — instead of the
+    populated object. The real extracted values live under `properties`, so the
+    accuracy comparator (which matches top-level keys against ground truth) sees
+    only {"type", "properties"} and scores 0%.
+
+    If `data` looks like that envelope (a dict whose only meaningful keys are
+    `type`/`properties`/`$schema`/`required` and whose `properties` is a dict of
+    already-resolved VALUES rather than nested {"type": ...} schema fragments),
+    return the inner `properties` object. Otherwise return `data` unchanged.
+    """
+    if not isinstance(data, dict):
+        return data
+    props = data.get("properties")
+    if not isinstance(props, dict) or not props:
+        return data
+    # Only treat as an envelope if the outer object carries no real data keys
+    # besides the schema-structural ones.
+    schema_keys = {"type", "properties", "$schema", "required", "title", "description"}
+    if any(k not in schema_keys for k in data.keys()):
+        return data
+    # Guard against unwrapping an ACTUAL schema: if every property value is itself
+    # a schema fragment (a dict containing a "type" key and no concrete value),
+    # this is a real schema definition, not populated data — leave it.
+    def _looks_like_schema_fragment(v):
+        return isinstance(v, dict) and "type" in v and set(v.keys()) <= {
+            "type", "properties", "items", "inferenceType", "instruction",
+            "description", "required", "enum", "format",
+        }
+    if props and all(_looks_like_schema_fragment(v) for v in props.values()):
+        return data
+    logger.info("Unwrapped JSON Schema envelope: returning inner 'properties' object")
+    return props
+
 
 def process_text_with_llm(text, output_schema=None):
     """
@@ -220,6 +371,7 @@ def process_text_with_llm(text, output_schema=None):
         
         try:
             structured_json = json.loads(structured_text)
+            structured_json = _unwrap_schema_envelope(structured_json)
             json_process_time = time.time() - start_time
             logger.info(f"JSON conversion completed in {json_process_time:.2f} seconds")
             return structured_json, token_usage

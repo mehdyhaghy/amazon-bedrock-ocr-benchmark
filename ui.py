@@ -1,14 +1,17 @@
 import gradio as gr
 import pandas as pd
-from shared.config import CUSTOM_THEME, BEDROCK_MODELS, STATUS_HTML, DEFAULT_S3_BUCKET
+from shared.config import CUSTOM_THEME, BEDROCK_MODELS, STATUS_HTML, DEFAULT_S3_BUCKET, RESULTS_TABLE_ROWS
 from sample_handler import list_sample_images
 
 def create_input_panel():
     """Create the input panel with sample selection and image upload"""
     with gr.Column() as panel:
+        _samples = list_sample_images()
+        _default_sample = _samples[0] if _samples else None
         with gr.Row():
             sample_dropdown = gr.Dropdown(
-                choices=list_sample_images(),
+                choices=_samples,
+                value=_default_sample,
                 label="Sample Images",
                 info="Select a sample image or upload your own",
                 scale=4
@@ -63,26 +66,37 @@ def create_input_panel():
 
 def create_results_table():
     """Create a table to display comparative performance metrics with dark mode support"""
-    # Pre-fill with 5 blank rows so the grid reserves space visually on load
+    # Gradio 6.x's Dataframe streaming-diff only renders correctly when the row
+    # count stays CONSTANT across generator yields. A dynamic row_count (rows
+    # changing each yield) causes only the latest single-row delta to render
+    # ("shows 1 row while N processed"). So we use a FIXED row_count and the
+    # streaming code pads each incremental DataFrame to exactly this many rows.
+    # Keep this >= the max number of engine variants (8 Bedrock models with
+    # effort expansions + Cerebras + Textract + BDA ≈ 26).
+    blank = [""] * RESULTS_TABLE_ROWS
     results_df = pd.DataFrame({
-        "Engine": [""] * 5,
-        "Tokens (in/out)": [""] * 5,
-        "Avg. Time (s)": [""] * 5,
-        "Min Time (s)": [""] * 5,
-        "Max Time (s)": [""] * 5,
-        "Avg. Cost ($)": [""] * 5,
-        "Total Cost ($)": [""] * 5,
-        "Accuracy (%)": [""] * 5,
+        "Engine": blank,
+        "Tokens\n(in/out)": list(blank),
+        "Avg.\nTime(s)": list(blank),
+        "Min\nTime(s)": list(blank),
+        "Max\nTime(s)": list(blank),
+        "Avg. Cost ($)": list(blank),
+        "Total Cost ($)": list(blank),
+        "Accuracy (%)": list(blank),
     })
-    
+
     results_table = gr.Dataframe(
         value=results_df,
         label="Comparison Results",
         interactive=False,
         wrap=True,
-        row_count=(20, "fixed"),
-        max_height=500,
-        column_widths=["200px", "120px", "100px", "100px", "100px", "120px", "120px", "100px"],
+        row_count=(RESULTS_TABLE_ROWS, "fixed"),
+        max_height=600,
+        # Slim time columns (80px): the headers are split onto two lines
+        # ("Avg.\nTime(s)") via the embedded newline + th { white-space: pre-line }
+        # so the label fits without wrapping the trailing ")" onto its own line.
+        # Reclaimed width goes to Engine (220px).
+        column_widths=["220px", "90px", "80px", "80px", "80px", "110px", "110px", "90px"],
         elem_id="results-dataframe",
         elem_classes="results-dataframe"
     )
@@ -166,18 +180,18 @@ def create_results_panel():
     """Create the results panel with tabs for each engine"""
     with gr.Column() as panel:
         with gr.Tabs() as tabs:
-            with gr.TabItem("Response"):
+            with gr.TabItem("Response", id="response"):
                 gr.Markdown("Click a row in the **Comparison Results** table above to view its response.")
                 response_json = gr.JSON(label="Raw JSON Output")
                 response_text = gr.Textbox(visible=False)
                 response_image = gr.Image(visible=False)
                 response_cost = gr.HTML("<div></div>")
             
-            with gr.TabItem("Truth"):
+            with gr.TabItem("Truth", id="truth"):
                 truth_status = gr.HTML("<div></div>", label="Status", visible=False)
                 truth_json = gr.JSON(label="Ground Truth Data")
             
-            with gr.TabItem("Compare"):
+            with gr.TabItem("Compare", id="compare"):
                 comparison_view = gr.HTML("<div>Click a row in the Comparison Results table to see its diff against ground truth</div>")
     
     # Hidden placeholders for backward-compatible output_components ordering.
@@ -232,4 +246,4 @@ def create_results_panel():
         comparison_view
     ]
     
-    return panel, input_components, output_components
+    return panel, input_components, output_components, tabs

@@ -94,7 +94,7 @@ def on_sample_selected(sample_filename):
 def process_all_samples(use_textract, use_bedrock, use_bda,
                      bedrock_model_name, bda_s3_bucket="", s3_bucket=DEFAULT_S3_BUCKET,
                      document_type="generic", enable_structured_output=True, output_schema="",
-                     use_bda_blueprint=False, use_cerebras=False):
+                     use_bda_blueprint=False, use_cerebras=False, call_count=5):
     """Process all sample images with parallel engine processing"""
     
     # Get list of all sample images
@@ -122,6 +122,9 @@ def process_all_samples(use_textract, use_bedrock, use_bda,
     logger.info(f"Created directory for this run: {run_dir}")
     
     total_start = time.time()
+    
+    # Imported lazily to avoid any import-order coupling with processor.py
+    from processor import run_with_repeats
     
     # Initialize engines
     textract_engine = TextractEngine()
@@ -178,22 +181,26 @@ def process_all_samples(use_textract, use_bedrock, use_bda,
                 
                 if use_bedrock:
                     futures['Bedrock'] = executor.submit(
-                        bedrock_engine.process_image,
+                        run_with_repeats,
+                        bedrock_engine,
                         image, {
                             'model_id': model_id,
                             'document_type': document_type,
                             'output_schema': image_output_schema if enable_structured_output and image_output_schema else None
-                        }
+                        },
+                        call_count
                     )
                 
                 if use_cerebras:
                     futures['Cerebras'] = executor.submit(
-                        cerebras_engine.process_image,
+                        run_with_repeats,
+                        cerebras_engine,
                         image, {
                             'model_id': cerebras_model_id,
                             'document_type': document_type,
                             'output_schema': image_output_schema if enable_structured_output and image_output_schema else None
-                        }
+                        },
+                        call_count
                     )
                 
                 if use_bda:
@@ -384,7 +391,7 @@ def create_current_results(results_by_engine):
             current_results.append({
                 "Engine": engine,
                 "Samples Processed": data["count"],
-                "Avg. Processing Time (s)": round(data["total_time"] / data["count"], 3),
+                "Avg. Processing Time (s)": round(data["total_time"] / data["count"], 2),
                 "Avg. Cost ($)": round(data["total_cost"] / data["count"], 6),
                 "Total Cost ($)": round(data["total_cost"], 6),
                 "Accuracy (%)": round(avg_accuracy, 2)

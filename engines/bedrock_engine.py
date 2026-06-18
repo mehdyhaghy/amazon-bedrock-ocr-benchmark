@@ -11,11 +11,14 @@ from typing import Dict, Any, Tuple, Optional
 from engines.base import OCREngine
 from shared.aws_client import get_aws_client
 from shared.image_utils import convert_to_bytes
-from shared.config import logger, API_COSTS, MAX_IMAGE_SIZE
+from shared.config import logger, API_COSTS, MAX_IMAGE_SIZE, MODELS_WITHOUT_STRUCTURED_OUTPUT, MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS_REASONING, resolve_max_output_tokens
+from shared.response_logger import log_engine_response
 from shared.prompt_manager import (
     get_prompt_for_document_type,
     get_structured_extraction_instructions,
+    get_json_only_instructions,
     sanitize_schema_for_structured_output,
+    parse_structured_output_fallback,
     OCR_SYSTEM_PROMPT,
 )
 
@@ -72,9 +75,45 @@ class BedrockEngine(OCREngine):
         document_type = options.get('document_type', 'generic')
         output_schema = options.get('output_schema')
         effort_level = options.get('effort_level')
+        # Display label for troubleshooting logs (e.g. "Claude Haiku 4.5 (4096)").
+        # Passed down from the processor when available; otherwise derive from the
+        # model id so logs are still identifiable.
+        engine_label = options.get('engine_label') or (model_id.split('.')[-1] if model_id else self.name)
+
+        # Troubleshooting state captured across the try/except so the failure
+        # paths can log the REAL token usage + raw output instead of the zeroed
+        # values returned to the UI. These are what make 0-token rows diagnosable.
+        token_usage = {'inputTokens': 0, 'outputTokens': 0, 'totalTokens': 0}
+        extracted_text = ""
+        stop_reason = None
         
         reasoning_config = _build_thinking_params(model_id, effort_level)
-        
+
+        # Resolve the effective output-token cap for THIS model. We request a
+        # generous cap to avoid mid-JSON truncation, but clamp it to the model's
+        # documented ceiling so Bedrock doesn't reject the request (e.g. Llama 4
+        # and Gemma 3 cap at 8K, Pixtral at 16K, Claude/Nova at 64K).
+        #
+        # If reasoning/thinking is enabled but the model's output ceiling is too
+        # low to fit BOTH the thinking budget and the final JSON, disable
+        # reasoning. Thinking tokens count against the output budget, so on a
+        # low-cap model they would crowd out the JSON and cause truncation. We
+        # detect this when the model can't reach the reasoning-tier budget
+        # (its clamped cap is below MAX_OUTPUT_TOKENS_REASONING).
+        if reasoning_config:
+            reasoning_cap = resolve_max_output_tokens(model_id, MAX_OUTPUT_TOKENS_REASONING)
+            if reasoning_cap < MAX_OUTPUT_TOKENS_REASONING:
+                logger.info(
+                    f"Model {model_id} output ceiling ({reasoning_cap}) is below the "
+                    f"reasoning budget ({MAX_OUTPUT_TOKENS_REASONING}); disabling "
+                    f"thinking/reasoning to preserve output room for the JSON."
+                )
+                reasoning_config = {}
+                effort_level = None
+
+        desired_max_tokens = MAX_OUTPUT_TOKENS_REASONING if reasoning_config else MAX_OUTPUT_TOKENS
+        max_output_tokens = resolve_max_output_tokens(model_id, desired_max_tokens)
+
         overall_start_time = time.time()
         # Set up timing context manager
         timing_ctx = self.get_timing_wrapper()
@@ -120,17 +159,41 @@ class BedrockEngine(OCREngine):
             try:
                 # Create Bedrock Runtime client
                 bedrock_runtime = get_aws_client('bedrock-runtime')
-                
-                # Get appropriate prompt based on document type.
-                prompt = get_prompt_for_document_type(document_type)
-                prompt += get_structured_extraction_instructions()
+
                 system_prompt = OCR_SYSTEM_PROMPT
 
-                # Structured output: enforce the schema via Converse
-                # outputConfig.textFormat (json_schema). The schema must be a
-                # JSON string per the Bedrock API. A bad/missing schema raises
-                # here — no prompt-based fallback.
+                # Sanitize/validate the schema up front. A bad/missing schema
+                # raises here on BOTH paths — no silent degradation.
                 sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+
+                # Default path: Converse + outputConfig.textFormat (constrained
+                # decoding). Some models reject the outputConfig field; for those
+                # we make a plain Converse call and recover JSON with a parsing
+                # step. The base document prompt is identical on both paths; only
+                # the trailing instruction differs (the gated path must explicitly
+                # ask for raw JSON since the schema isn't API-enforced).
+                #
+                # `_force_no_structured_output` is an internal safety-net flag set
+                # by this method's own retry (see except block): if a model NOT in
+                # MODELS_WITHOUT_STRUCTURED_OUTPUT unexpectedly rejects outputConfig
+                # at runtime, we retry once on the fallback path so the API call
+                # never hard-fails due to a stale capability list.
+                force_no_structured = bool(options.get('_force_no_structured_output'))
+                supports_structured_output = (
+                    not force_no_structured
+                    and model_id not in MODELS_WITHOUT_STRUCTURED_OUTPUT
+                )
+
+                prompt = get_prompt_for_document_type(document_type)
+                if supports_structured_output:
+                    prompt += get_structured_extraction_instructions()
+                else:
+                    prompt += get_json_only_instructions(sanitized_schema)
+                    logger.info(
+                        f"Model {model_id} does not support outputConfig; using "
+                        f"prompt-based JSON extraction + parsing/formatting step."
+                    )
+
                 text_format_config = {
                     "type": "json_schema",
                     "structure": {
@@ -169,11 +232,12 @@ class BedrockEngine(OCREngine):
                         "modelId": model_id,
                         "messages": messages,
                         "system": [{"text": system_prompt}],
-                        "inferenceConfig": {"maxTokens": 32000 if reasoning_config else 4000}
+                        "inferenceConfig": {"maxTokens": max_output_tokens}
                     }
                     if reasoning_config:
                         converse_args["additionalModelRequestFields"] = reasoning_config
-                    converse_args["outputConfig"] = {"textFormat": text_format_config}
+                    if supports_structured_output:
+                        converse_args["outputConfig"] = {"textFormat": text_format_config}
                     
                     response = bedrock_runtime.converse(**converse_args)
                     
@@ -227,11 +291,12 @@ class BedrockEngine(OCREngine):
                         "modelId": model_id,
                         "messages": messages,
                         "system": [{"text": system_prompt}],
-                        "inferenceConfig": {"maxTokens": 32000 if reasoning_config else 4000}
+                        "inferenceConfig": {"maxTokens": max_output_tokens}
                     }
                     if reasoning_config:
                         converse_args["additionalModelRequestFields"] = reasoning_config
-                    converse_args["outputConfig"] = {"textFormat": text_format_config}
+                    if supports_structured_output:
+                        converse_args["outputConfig"] = {"textFormat": text_format_config}
                     
                     response = bedrock_runtime.converse(**converse_args)
                     
@@ -302,10 +367,75 @@ class BedrockEngine(OCREngine):
                     # Convert to numpy array
                     annotated_image = np.array(annotated_img_copy)
                 
-                # Parse the JSON. Structured output guarantees schema-valid JSON,
-                # so parse strictly — any failure propagates to the outer except
-                # and surfaces as an error result (no lenient repair / no fallback).
-                structured_json = json.loads(extracted_text)
+                # Guard against silent truncation: if generation stopped because
+                # it hit the token cap, the JSON is almost certainly incomplete.
+                # Surface this as an explicit error rather than parsing a partial
+                # object (which would yield misleading "success"/low accuracy).
+                stop_reason = response.get('stopReason')
+                if stop_reason == 'max_tokens':
+                    # Log the truncation with the REAL token usage + partial text
+                    # before raising, so the 0-token row can be traced to "model
+                    # hit the output cap mid-JSON".
+                    log_engine_response(
+                        engine_label,
+                        model_id=model_id,
+                        status="truncated",
+                        options=options,
+                        token_usage=token_usage,
+                        stop_reason=stop_reason,
+                        raw_text=extracted_text,
+                        max_output_tokens=max_output_tokens,
+                        structured_output=supports_structured_output,
+                        error=f"Output truncated at max_tokens={max_output_tokens}; JSON incomplete.",
+                    )
+                    raise ValueError(
+                        f"Output truncated: model hit the max_tokens limit "
+                        f"({max_output_tokens}). "
+                        f"The JSON response is incomplete."
+                    )
+
+                # Parse the model output into JSON.
+                # - Supported models: constrained decoding guarantees
+                #   schema-valid JSON, so parse strictly (json.loads). Any
+                #   failure surfaces as an error (no repair, no fallback).
+                # - Capability-gated models (no outputConfig): the response is
+                #   prompt-guided free text, so use the tolerant fallback parser
+                #   which strips code fences / surrounding prose / trailing
+                #   commas. It still raises on unrecoverable output.
+                if supports_structured_output:
+                    try:
+                        structured_json = json.loads(extracted_text)
+                    except (json.JSONDecodeError, ValueError) as parse_err:
+                        log_engine_response(
+                            engine_label,
+                            model_id=model_id,
+                            status="parse_error",
+                            options=options,
+                            token_usage=token_usage,
+                            stop_reason=stop_reason,
+                            raw_text=extracted_text,
+                            max_output_tokens=max_output_tokens,
+                            structured_output=True,
+                            error=f"Strict json.loads failed: {parse_err}",
+                        )
+                        raise
+                else:
+                    try:
+                        structured_json = parse_structured_output_fallback(extracted_text)
+                    except Exception as parse_err:
+                        log_engine_response(
+                            engine_label,
+                            model_id=model_id,
+                            status="parse_error",
+                            options=options,
+                            token_usage=token_usage,
+                            stop_reason=stop_reason,
+                            raw_text=extracted_text,
+                            max_output_tokens=max_output_tokens,
+                            structured_output=False,
+                            error=f"Fallback parser failed: {parse_err}",
+                        )
+                        raise
                 
                 logger.info(f"Bedrock processing completed in {timing_ctx.process_time:.2f} seconds")
                 overall_process_time = time.time() - overall_start_time
@@ -320,6 +450,17 @@ class BedrockEngine(OCREngine):
                         logger.warning(f"Failed to clean up temporary PDF: {cleanup_error}")
 
                 # Return dictionary with all necessary information
+                log_engine_response(
+                    engine_label,
+                    model_id=model_id,
+                    status="success",
+                    options=options,
+                    token_usage=token_usage,
+                    stop_reason=stop_reason,
+                    raw_text=extracted_text,
+                    max_output_tokens=max_output_tokens,
+                    structured_output=supports_structured_output,
+                )
                 return {
                     "text": extracted_text,
                     "json": structured_json,
@@ -345,6 +486,77 @@ class BedrockEngine(OCREngine):
                     except Exception as cleanup_error:
                         logger.warning(f"Failed to clean up temporary PDF after error: {cleanup_error}")
                 
+                # Safety net: if we sent outputConfig and the model failed at
+                # runtime in a way that the prompt-based path can recover from,
+                # retry ONCE on the fallback path so the call doesn't hard-fail
+                # with 0/0. Two distinct runtime failure modes are covered:
+                #
+                #   1. Capability rejection — the model doesn't accept the
+                #      outputConfig field at all (stale capability list):
+                #        "...doesn't support the outputConfig field"
+                #        "output_config.format: Extra inputs are not permitted"
+                #
+                #   2. Constrained-decoding grammar failure — the model accepts
+                #      outputConfig but its grammar compiler can't handle THIS
+                #      schema (observed for Claude 4.x on dense schemas):
+                #        "Grammar compilation timed out"  (Haiku 4.5, ~180s)
+                #        "Schema is too complex"          (Sonnet 4.6, ~5s)
+                #      The prompt-based path has no grammar step, so it succeeds.
+                #
+                # Only retry when we actually attempted the structured path.
+                err_msg = str(e)
+                is_output_config_rejection = (
+                    ("outputConfig" in err_msg or "output_config" in err_msg)
+                    and ("doesn't support" in err_msg or "Extra inputs are not permitted" in err_msg)
+                )
+                is_grammar_failure = (
+                    "Grammar compilation timed out" in err_msg
+                    or "Schema is too complex" in err_msg
+                )
+                if (
+                    supports_structured_output
+                    and (is_output_config_rejection or is_grammar_failure)
+                    and not options.get('_force_no_structured_output')
+                ):
+                    reason = (
+                        "grammar compilation failed for this schema"
+                        if is_grammar_failure
+                        else "rejected outputConfig at runtime (not in MODELS_WITHOUT_STRUCTURED_OUTPUT)"
+                    )
+                    logger.warning(
+                        f"Model {model_id} {reason}. Retrying once on the "
+                        f"prompt-based fallback path."
+                    )
+                    log_engine_response(
+                        engine_label,
+                        model_id=model_id,
+                        status="grammar_error" if is_grammar_failure else "output_config_rejected",
+                        options=options,
+                        token_usage=token_usage,
+                        stop_reason=stop_reason,
+                        raw_text=extracted_text,
+                        max_output_tokens=max_output_tokens,
+                        structured_output=supports_structured_output,
+                        error=err_msg,
+                        extra={"action": "retry_on_prompt_based_path"},
+                    )
+                    retry_options = {**options, '_force_no_structured_output': True}
+                    return self.process_image(image, retry_options)
+
+                # Terminal failure: record the REAL token usage + raw output (even
+                # though we return 0/0 to the UI) so the 0-token row is traceable.
+                log_engine_response(
+                    engine_label,
+                    model_id=model_id,
+                    status="error",
+                    options=options,
+                    token_usage=token_usage,
+                    stop_reason=stop_reason,
+                    raw_text=extracted_text,
+                    max_output_tokens=max_output_tokens,
+                    structured_output=supports_structured_output,
+                    error=err_msg,
+                )
                 return {
                     "text": f"Amazon Bedrock Error: {str(e)}",
                     "json": None,

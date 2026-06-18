@@ -11,6 +11,9 @@ from shared.config import (
     logger,
     API_COSTS,
     MAX_IMAGE_SIZE,
+    MAX_OUTPUT_TOKENS,
+    MAX_OUTPUT_TOKENS_REASONING,
+    resolve_max_output_tokens,
     CEREBRAS_API_KEY,
     CEREBRAS_BASE_URL,
 )
@@ -144,17 +147,52 @@ class CerebrasEngine(OCREngine):
                     },
                 ]
 
+                # Clamp the desired output cap to the model's ceiling (uniform
+                # with the Bedrock engine). Cerebras Gemma 4 supports a large
+                # output window; OCR JSON stays well under it.
+                #
+                # If reasoning is enabled but the model's ceiling can't fit the
+                # reasoning-tier budget, disable reasoning so thinking tokens
+                # don't crowd out the JSON on a low-cap model.
+                if effort_level:
+                    reasoning_cap = resolve_max_output_tokens(model_id, MAX_OUTPUT_TOKENS_REASONING)
+                    if reasoning_cap < MAX_OUTPUT_TOKENS_REASONING:
+                        logger.info(
+                            f"Model {model_id} output ceiling ({reasoning_cap}) is below "
+                            f"the reasoning budget ({MAX_OUTPUT_TOKENS_REASONING}); disabling "
+                            f"reasoning to preserve output room for the JSON."
+                        )
+                        effort_level = None
+                cerebras_max_tokens = resolve_max_output_tokens(
+                    model_id,
+                    MAX_OUTPUT_TOKENS_REASONING if effort_level else MAX_OUTPUT_TOKENS,
+                )
                 create_args = {
                     "model": model_id,
                     "messages": messages,
                     "temperature": 0,
-                    "max_completion_tokens": 32000 if effort_level else 4000,
+                    "max_completion_tokens": cerebras_max_tokens,
                     "response_format": response_format,
                 }
                 # reasoning_effort: None -> "none" (off). Otherwise pass through.
                 create_args["reasoning_effort"] = effort_level if effort_level else "none"
 
                 response = client.chat.completions.create(**create_args)
+
+                # Guard against silent truncation: finish_reason == "length"
+                # means generation hit max_completion_tokens, so the JSON is
+                # incomplete. Surface as an explicit error rather than parsing a
+                # partial object.
+                try:
+                    finish_reason = response.choices[0].finish_reason
+                except (AttributeError, IndexError):
+                    finish_reason = None
+                if finish_reason == "length":
+                    raise ValueError(
+                        f"Output truncated: model hit the max_completion_tokens limit "
+                        f"({cerebras_max_tokens}). "
+                        f"The JSON response is incomplete."
+                    )
 
                 # Extract text from the chat-completions response.
                 extracted_text = ""
