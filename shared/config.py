@@ -95,7 +95,7 @@ EFFORT_LEVELS = {
     "us.anthropic.claude-opus-4-8": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-sonnet-4-6": ("adaptive", ["low", "medium"]),
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": ("budget", [1024, 4096, 16384]),
-    "us.amazon.nova-2-lite-v1:0": ("nova", ["low"]),
+    "us.amazon.nova-2-lite-v1:0": ("nova", []),
 }
 
 # Bedrock models that do NOT support the Converse `outputConfig.textFormat`
