@@ -169,6 +169,50 @@ def get_json_only_instructions(output_schema=None):
     return instr
 
 
+def _repair_unclosed_json(text):
+    """Append the closing tokens needed to balance a structurally-truncated
+    JSON object/array.
+
+    Walks `text` (which must start at the opening '{' or '[') tracking a stack
+    of open '{'/'[' while respecting string literals and escapes. If the text
+    ends with unclosed openers, returns `text` plus the matching closers in the
+    correct (reverse) order. Returns None if the structure is already balanced
+    or is otherwise unrepairable by simple closing (e.g. ends inside an open
+    string literal).
+
+    This is intentionally conservative: it ONLY appends '}'/']' and never edits
+    existing characters, so it cannot invent or change field values — it can
+    only close an object the model failed to terminate.
+    """
+    stack = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+
+    # If we ended inside an open string, we can't safely repair (would need to
+    # guess where the value ends). Bail out.
+    if in_string or not stack:
+        return None
+
+    closers = "".join("}" if opener == "{" else "]" for opener in reversed(stack))
+    return text + closers
+
+
 def parse_structured_output_fallback(raw_text):
     """Tolerant JSON extraction for models that do NOT support Converse
     structured output (outputConfig).
@@ -238,6 +282,25 @@ def parse_structured_output_fallback(raw_text):
                 break
 
     if end == -1:
+        # The model under-generated and left the root object unclosed (observed
+        # with Llama 4 Maverick on the large insurance_claim schema: it emitted
+        # stop_reason=end_turn but was missing trailing closing brace(s)). Try a
+        # bounded repair: append the closers needed to balance unclosed
+        # {/[ openers, in the correct order. This ONLY appends } / ] — it never
+        # alters or removes existing content — so it can't fabricate field
+        # values, just close a structurally-truncated object.
+        repaired = _repair_unclosed_json(text[start:])
+        if repaired is not None:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                # Also strip trailing commas before the appended closers.
+                import re as _re
+                repaired2 = _re.sub(r",(\s*[}\]])", r"\1", repaired)
+                try:
+                    return json.loads(repaired2)
+                except json.JSONDecodeError:
+                    pass
         raise ValueError("Unbalanced JSON object in model response.")
 
     candidate = text[start:end + 1]
@@ -269,40 +332,102 @@ def get_prompt_for_document_type(document_type="generic"):
 def _unwrap_schema_envelope(data):
     """Unwrap a JSON Schema envelope that some models emit instead of plain data.
 
-    When asked to "format output according to this JSON schema", the post-
-    processing model occasionally echoes the SCHEMA shape — e.g.
-    {"type": "object", "properties": {<actual field values>}} — instead of the
-    populated object. The real extracted values live under `properties`, so the
-    accuracy comparator (which matches top-level keys against ground truth) sees
-    only {"type", "properties"} and scores 0%.
+    When asked to "format output according to this JSON schema", some models
+    echo the SCHEMA shape instead of a flat populated object. Two variants are
+    handled, recursively and in combination:
 
-    If `data` looks like that envelope (a dict whose only meaningful keys are
-    `type`/`properties`/`$schema`/`required` and whose `properties` is a dict of
-    already-resolved VALUES rather than nested {"type": ...} schema fragments),
-    return the inner `properties` object. Otherwise return `data` unchanged.
+      1. Object envelope:
+           {"type": "object", "properties": {<fields>}}   ->  {<fields>}
+      2. Per-field value wrapper:
+           {"type": "string", "value": "JOHN DOE"}        ->  "JOHN DOE"
+           {"type": "array",  "items": [...]}             ->  [...]
+
+    Example (Llama 4 Maverick on insurance_claim):
+        {"type":"object","properties":{
+            "form_title":{"type":"string","value":"HEALTH INSURANCE CLAIM FORM"},
+            "5_patient_address":{"type":"object","properties":{
+                "city":{"type":"string","value":"Any City"}}}}}
+    unwraps to:
+        {"form_title":"HEALTH INSURANCE CLAIM FORM",
+         "5_patient_address":{"city":"Any City"}}
+
+    A genuine JSON *schema* (fields shaped like {"type":"string"} with NO
+    "value"/"items"/"properties" payload) is left unchanged, so we never
+    destroy a real schema definition or invent values.
     """
-    if not isinstance(data, dict):
+    _SCHEMA_STRUCTURAL_KEYS = {
+        "type", "properties", "items", "value", "$schema", "required",
+        "title", "description", "inferenceType", "instruction", "enum", "format",
+        "additionalProperties",
+    }
+
+    def _is_value_wrapper(d):
+        # {"type": <str>, "value": X}  (X may be None) — a wrapped scalar value.
+        return (
+            isinstance(d, dict)
+            and "value" in d
+            and "type" in d
+            and set(d.keys()) <= _SCHEMA_STRUCTURAL_KEYS
+        )
+
+    def _is_bare_schema_fragment(v):
+        # A genuine schema field: {"type": "string"} with NO data payload
+        # (no value/items, and properties only if it's a nested schema).
+        return (
+            isinstance(v, dict)
+            and "type" in v
+            and "value" not in v
+            and "items" not in v
+            and "properties" not in v
+            and set(v.keys()) <= _SCHEMA_STRUCTURAL_KEYS
+        )
+
+    def _is_object_envelope(d):
+        # {"type":"object"?, "properties": {...}} with only structural keys.
+        # Accept when it holds DATA (BDA: bare resolved values; or value/items/
+        # properties wrappers). Reject a genuine schema where EVERY property is a
+        # bare {"type": ...} fragment (no values), so real schemas pass through.
+        if not (
+            isinstance(d, dict)
+            and isinstance(d.get("properties"), dict)
+            and d["properties"]
+            and set(d.keys()) <= _SCHEMA_STRUCTURAL_KEYS
+        ):
+            return False
+        return not all(_is_bare_schema_fragment(v) for v in d["properties"].values())
+
+    def _is_array_wrapper(d):
+        # {"type":"array", "items":[...]} with only structural keys.
+        return (
+            isinstance(d, dict)
+            and isinstance(d.get("items"), list)
+            and set(d.keys()) <= _SCHEMA_STRUCTURAL_KEYS
+        )
+
+    def _unwrap(node, changed):
+        if isinstance(node, dict):
+            if _is_value_wrapper(node):
+                changed[0] = True
+                return _unwrap(node["value"], changed)
+            if _is_object_envelope(node):
+                changed[0] = True
+                return {k: _unwrap(v, changed) for k, v in node["properties"].items()}
+            if _is_array_wrapper(node):
+                changed[0] = True
+                return [_unwrap(v, changed) for v in node["items"]]
+            # Plain object: recurse into each value.
+            return {k: _unwrap(v, changed) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_unwrap(v, changed) for v in node]
+        return node
+
+    if not isinstance(data, (dict, list)):
         return data
-    props = data.get("properties")
-    if not isinstance(props, dict) or not props:
-        return data
-    # Only treat as an envelope if the outer object carries no real data keys
-    # besides the schema-structural ones.
-    schema_keys = {"type", "properties", "$schema", "required", "title", "description"}
-    if any(k not in schema_keys for k in data.keys()):
-        return data
-    # Guard against unwrapping an ACTUAL schema: if every property value is itself
-    # a schema fragment (a dict containing a "type" key and no concrete value),
-    # this is a real schema definition, not populated data — leave it.
-    def _looks_like_schema_fragment(v):
-        return isinstance(v, dict) and "type" in v and set(v.keys()) <= {
-            "type", "properties", "items", "inferenceType", "instruction",
-            "description", "required", "enum", "format",
-        }
-    if props and all(_looks_like_schema_fragment(v) for v in props.values()):
-        return data
-    logger.info("Unwrapped JSON Schema envelope: returning inner 'properties' object")
-    return props
+    changed = [False]
+    result = _unwrap(data, changed)
+    if changed[0]:
+        logger.info("Unwrapped JSON Schema envelope from model response")
+    return result
 
 
 def process_text_with_llm(text, output_schema=None):

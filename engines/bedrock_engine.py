@@ -19,6 +19,7 @@ from shared.prompt_manager import (
     get_json_only_instructions,
     sanitize_schema_for_structured_output,
     parse_structured_output_fallback,
+    _unwrap_schema_envelope,
     OCR_SYSTEM_PROMPT,
 )
 
@@ -436,7 +437,13 @@ class BedrockEngine(OCREngine):
                             error=f"Fallback parser failed: {parse_err}",
                         )
                         raise
-                
+
+                # Some models echo the JSON Schema shape ({type, properties:{...}})
+                # instead of a flat populated object (seen with Llama 4 Maverick on
+                # the large insurance_claim schema). Unwrap it so accuracy scoring
+                # sees the real field values, not the schema keys.
+                structured_json = _unwrap_schema_envelope(structured_json)
+
                 logger.info(f"Bedrock processing completed in {timing_ctx.process_time:.2f} seconds")
                 overall_process_time = time.time() - overall_start_time
                 logger.info(f"Bedrock total processing time: {overall_process_time:.2f} seconds")
