@@ -111,14 +111,15 @@ uv venv
 uv pip install -r requirements.txt
 ```
 
-### Pinned dependencies (April 2026)
+### Pinned dependencies (June 2026)
 
-- `gradio==6.12.0`
-- `boto3==1.42.90`
+- `gradio==6.19.0`
+- `boto3==1.43.36`
 - `Pillow==12.2.0`
-- `numpy==2.4.4`
-- `pandas==3.0.2`
-- `pymupdf==1.27.2.2`
+- `numpy==2.5.0`
+- `pandas==3.0.3`
+- `pymupdf==1.27.2.3`
+- `cerebras-cloud-sdk==1.67.0`
 
 ## Configuration
 
