@@ -1,25 +1,29 @@
 # Amazon Bedrock OCR Benchmark
 
-A side-by-side benchmarking tool that runs the same document through **Amazon Textract**, **Amazon Bedrock Data Automation (BDA)**, and **8 Amazon Bedrock foundation models** (with every available reasoning-effort variant) — all in parallel — and reports latency, cost, and accuracy vs ground truth.
+A side-by-side benchmarking tool that runs the same document through **Amazon Textract**, **Amazon Bedrock Data Automation (BDA)**, **11 Amazon Bedrock foundation models** (with every available reasoning-effort variant), and an external **Cerebras Inference** model — all in parallel — and reports latency, cost, and accuracy vs ground truth.
 
 <img src="asset/sample-ui.png" width="900" alt="UI">
 
 ## How it works
 
-Enabling **Use Bedrock** automatically runs **all 8 configured models**. Models that support reasoning get expanded into one standalone call per effort level, each appearing as its own row in the results table.
+Enabling **Use Bedrock** automatically runs **all 11 configured Bedrock models**. Models that support reasoning get expanded into one standalone call per effort level (plus an `off` baseline), each appearing as its own row in the results table. Enabling **Use Cerebras** additionally runs the Cerebras-hosted model (requires a `CEREBRAS_API_KEY` — see Configuration).
 
 | Model | Provider | Reasoning mode | Variants |
 |---|---|---|---|
 | Claude Opus 4.8 | Anthropic | adaptive thinking | off, low, medium |
 | Claude Sonnet 4.6 | Anthropic | adaptive thinking | off, low, medium |
 | Claude Haiku 4.5 | Anthropic | budget_tokens | off, 1024, 4096, 16384 |
-| Amazon Nova 2 Lite | Amazon | reasoningConfig | off, low, medium |
+| Amazon Nova 2 Lite | Amazon | reasoningConfig (effort levels currently disabled) | off |
 | Pixtral Large | Mistral | — | 1 |
 | Mistral Large 3 | Mistral | — | 1 |
 | Llama 4 Maverick 17B | Meta | — | 1 |
 | Llama 4 Scout 17B | Meta | — | 1 |
+| Gemma 3 4B | Google | — | 1 |
+| Gemma 3 12B | Google | — | 1 |
+| Gemma 3 27B | Google | — | 1 |
+| Gemma 4 31B *(Cerebras)* | Google / Cerebras | — | 1 |
 
-**Total Bedrock variants per image: 17** (3 Opus + 3 Sonnet + 4 Haiku + 3 Nova thinking/off rows + 4 non-thinking models).
+**Total Bedrock variants per image: 18** (3 Opus + 3 Sonnet + 4 Haiku + 1 Nova + 7 single-call models). Enabling Cerebras adds **1** more variant (Gemma 4 31B). Textract and BDA each add one row.
 
 All Bedrock calls go through the **Converse API** uniformly for both images and PDFs. Reasoning parameters are passed via `additionalModelRequestFields`:
 
@@ -29,14 +33,20 @@ All Bedrock calls go through the **Converse API** uniformly for both images and 
 
 ## UI Layout
 
-- **Comparison Results** grid — one row per engine/variant. Populated in one shot when all variants finish, then sorted by processing time ascending. Click any row to:
+- **Engine toggles** — **Use Textract**, **Use Bedrock**, **Use BDA**, and **Use Cerebras** (all checked by default).
+- **Basic Configuration**:
+  - **Document Type** (`generic`, `form`, `receipt`, `table`, `handwritten`) — optimizes prompt selection.
+  - **Enable Structured Output** — request schema-shaped JSON (uses additional Bedrock API calls).
+  - **Calls per model** — how many times to call each variant; time is reported as avg/min/max.
+- **Bedrock Configuration** → **Use Custom Blueprint (BDA)** — when enabled, BDA builds a custom blueprint from the output schema; when disabled, it uses default extraction with Claude Haiku post-processing.
+- **Comparison Results** grid — one row per engine/variant. Rows stream in as each variant completes, then the grid is sorted by processing time ascending. Click any row to:
   - Load its raw JSON in the **Response** tab
   - Load its field-by-field diff against ground truth in the **Compare** tab (heading shows the selected engine name)
 - **Truth** tab — shows the loaded ground-truth JSON
 - **Response** tab — raw JSON output + API cost (updates from row clicks)
 - **Compare** tab — field-by-field diff (updates from row clicks, no dropdown)
 
-The global status bar shows live progress: `N/M engines completed in X seconds (est. cost: $Y)`, switching to a dismissable green "All processing completed" banner when all variants finish. Columns: **Engine**, **Tokens (in/out)**, **Avg. Processing Time (s)**, **Avg. Cost ($)**, **Total Cost ($)**, **Accuracy (%)**.
+The global status bar shows live progress: `N/M engines completed in X seconds (Total est. cost: $Y)`, switching to a dismissable green "All processing completed" banner when all variants finish. Columns: **Engine**, **Tokens (in/out)**, **Avg. Time(s)**, **Min Time(s)**, **Max Time(s)**, **Avg. Cost ($)**, **Total Cost ($)**, **Accuracy (%)**.
 
 ## Robust JSON parsing
 
@@ -79,7 +89,8 @@ If an image has no matching schema file, a generic `{"type": "object"}` template
 
 - Python 3.10+
 - AWS credentials configured locally
-- Bedrock model access granted (via the Bedrock console) for all 8 models above in your region
+- Bedrock model access granted (via the Bedrock console) for all 11 Bedrock models above in your region
+- (Optional) A `CEREBRAS_API_KEY` if you enable **Use Cerebras** (see Configuration)
 - S3 bucket (optional — only required for BDA processing, and for Textract on PDFs)
 
 ## Installation
@@ -127,6 +138,14 @@ The default S3 bucket (used by Textract for PDFs and by BDA) is **not committed*
 
 3. **At runtime** in the UI's **S3 Bucket for Processing** textbox.
 
+To enable **Use Cerebras**, provide a `CEREBRAS_API_KEY` the same way — either set `CEREBRAS_API_KEY` in `shared/local_settings.py` or export it as an environment variable:
+
+```bash
+export CEREBRAS_API_KEY=csk-...
+# optional: override the API base URL
+export CEREBRAS_BASE_URL=https://api.cerebras.ai/v1
+```
+
 The `bedrock-runtime` client is configured with `read_timeout=120` (2 minutes) and `max_attempts=0` (no retries) so slow/stuck models fail fast and are surfaced as errors in the results grid instead of blocking the whole run.
 
 ## Usage
@@ -135,7 +154,7 @@ The `bedrock-runtime` client is configured with `read_timeout=120` (2 minutes) a
 python app.py
 ```
 
-Open http://localhost:7860. By default **Use Bedrock** and **Use BDA** are checked. Select a sample or upload your own image/PDF and click **🚀 Process File**.
+Open http://localhost:7860. By default all four engines (**Use Textract**, **Use Bedrock**, **Use BDA**, **Use Cerebras**) are checked. Select a sample or upload your own image/PDF and click **🚀 Process File**.
 
 ## Project structure
 
@@ -150,9 +169,10 @@ Open http://localhost:7860. By default **Use Bedrock** and **Use BDA** are check
 ├── engines/
 │   ├── textract_engine.py
 │   ├── bedrock_engine.py       # Converse API for all models + JSON repair pipeline
+│   ├── cerebras_engine.py      # External Cerebras Inference provider (Gemma 4)
 │   └── bda_engine.py
 ├── shared/
-│   ├── config.py               # BEDROCK_MODELS, EFFORT_LEVELS, API_COSTS
+│   ├── config.py               # BEDROCK_MODELS, CEREBRAS_MODELS, EFFORT_LEVELS, API_COSTS
 │   ├── aws_client.py           # bedrock-runtime client (2-min read_timeout, no retries)
 │   ├── prompt_manager.py       # Strict JSON-only prompt instructions
 │   ├── evaluator.py            # Recursive field-level accuracy
@@ -165,7 +185,7 @@ Open http://localhost:7860. By default **Use Bedrock** and **Use BDA** are check
 
 ## Credits
 
-This project is based on the [aws-samples/ocr-with-aws-ai-services](https://github.com/aws-samples/ocr-with-aws-ai-services) repository by AWS. This fork adds benchmark mode across 8 Bedrock foundation models with reasoning effort variants, unified Converse API for images and PDFs, an interactive Gradio 6 UI with row-click drill-down, and a robust multi-stage JSON repair pipeline for model outputs.
+This project is based on the [aws-samples/ocr-with-aws-ai-services](https://github.com/aws-samples/ocr-with-aws-ai-services) repository by AWS. This fork adds benchmark mode across 11 Bedrock foundation models with reasoning effort variants plus an external Cerebras Inference model, unified Converse API for images and PDFs, an interactive Gradio 6 UI with row-click drill-down, and a robust multi-stage JSON repair pipeline for model outputs.
 
 ## License
 
