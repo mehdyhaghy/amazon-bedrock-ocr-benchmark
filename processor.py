@@ -461,8 +461,12 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
     bda_engine = BDAEngine()
     cerebras_engine = CerebrasEngine()
 
-    # Process with selected engines in parallel
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    # Process with selected engines in parallel. Cap concurrency at 3 workers:
+    # firing all ~21 variants × N calls at once overwhelmed the Bedrock endpoint
+    # and caused transient "Connection was closed before we received a valid
+    # response" drops (recorded as 0-token errors). With retries disabled
+    # (max_attempts=0), limiting in-flight requests is what keeps runs clean.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         futures = {}
         
         if use_textract:
