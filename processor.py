@@ -9,9 +9,46 @@ from engines.textract_engine import TextractEngine
 from engines.bedrock_engine import BedrockEngine
 from engines.bda_engine import BDAEngine
 from engines.cerebras_engine import CerebrasEngine
+from shared.aws_client import get_aws_client
 from shared.cost_calculator import calculate_bedrock_cost, calculate_bda_cost, calculate_full_textract_cost
 from shared.evaluator import load_truth_data, calculate_accuracy, get_detailed_accuracy
 from shared.comparison_utils import create_diff_view
+
+
+def _preflight_bedrock():
+    """Pre-initialize the Bedrock clients on the MAIN thread and verify
+    connectivity BEFORE the worker pool fans out.
+
+    Two purposes:
+      1. Force single-threaded construction of the lru_cached 'bedrock-runtime'
+         client so multiple worker threads can't race to build it on first use
+         (boto3 client construction is not guaranteed thread-safe; a concurrent
+         first-build can yield a half-initialized client that fails instantly —
+         the ~0.2s "Connection was closed before we received a valid response"
+         signature seen on the first Opus calls of a run).
+      2. Give a clear, upfront creds/connectivity signal via a cheap control-
+         plane call (no token cost).
+
+    Non-fatal: logs and returns (ok, message); the run proceeds either way so a
+    transient control-plane hiccup doesn't block engines that might still work.
+
+    NOTE: list_foundation_models hits the 'bedrock' (control-plane) endpoint,
+    which is SEPARATE from the 'bedrock-runtime' (data-plane) endpoint the
+    converse calls use — so this validates creds/region and initializes the
+    client object, but does NOT pre-open the runtime connection pool.
+    """
+    try:
+        get_aws_client('bedrock-runtime')  # force build the cached runtime client
+        bedrock = get_aws_client('bedrock')
+        # NOTE: list_foundation_models takes NO maxResults param (only by* filters);
+        # passing maxResults raises ParamValidationError. Filter by provider to keep
+        # the control-plane response small.
+        bedrock.list_foundation_models(byProvider='Anthropic')
+        logger.info("Bedrock preflight OK (runtime client initialized + connectivity verified)")
+        return True, "ok"
+    except Exception as e:
+        logger.warning(f"Bedrock preflight failed: {type(e).__name__}: {e}")
+        return False, str(e)
 
 def initialize_processing(image, image_name=None):
     """Initialize data for image processing"""
@@ -460,6 +497,11 @@ def process_image_with_engines(image, use_textract, use_bedrock, use_bda,
     bedrock_engine = BedrockEngine()
     bda_engine = BDAEngine()
     cerebras_engine = CerebrasEngine()
+
+    # Preflight: initialize the Bedrock client on the main thread and verify
+    # connectivity before fanning out to worker threads (see _preflight_bedrock).
+    if use_bedrock:
+        _preflight_bedrock()
 
     # Process with selected engines in parallel. Cap concurrency at 3 workers:
     # firing all ~21 variants × N calls at once overwhelmed the Bedrock endpoint
