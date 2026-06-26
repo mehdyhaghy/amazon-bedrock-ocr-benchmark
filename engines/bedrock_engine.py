@@ -43,6 +43,62 @@ def _build_thinking_params(model_id, effort_level):
         return {"inferenceConfig": {"reasoningConfig": {"type": "enabled", "maxReasoningEffort": effort_level}}}
     return {}
 
+
+def _describe_exception(e):
+    """Capture the FULL raw error for troubleshooting, not just str(e).
+
+    botocore wraps the real network failure (e.g. urllib3 ProtocolError /
+    http.client.RemoteDisconnected) inside ConnectionClosedError, so str(e)
+    loses the actual cause. This walks the __cause__/__context__ chain and
+    pulls botocore HTTP/response metadata so we can tell apart:
+      - stale-socket reuse  (RemoteDisconnected / "Connection aborted")
+      - server-side close under load
+      - throttling / client-init issues (request never left the socket)
+    Returns a JSON-serializable dict.
+    """
+    import traceback as _tb
+
+    detail = {
+        "type": f"{type(e).__module__}.{type(e).__name__}",
+        "str": str(e),
+        "repr": repr(e)[:1000],
+    }
+
+    # Walk the exception chain (__cause__ first, then __context__).
+    chain = []
+    seen = set()
+    cur = e
+    for _ in range(10):
+        nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        if nxt is None or id(nxt) in seen:
+            break
+        seen.add(id(nxt))
+        chain.append({
+            "type": f"{type(nxt).__module__}.{type(nxt).__name__}",
+            "str": str(nxt)[:500],
+        })
+        cur = nxt
+    if chain:
+        detail["cause_chain"] = chain
+
+    # botocore ClientError / connection errors expose useful metadata.
+    resp = getattr(e, "response", None)
+    if isinstance(resp, dict):
+        meta = resp.get("ResponseMetadata", {}) or {}
+        detail["botocore"] = {
+            "error_code": (resp.get("Error", {}) or {}).get("Code"),
+            "http_status": meta.get("HTTPStatusCode"),
+            "request_id": meta.get("RequestId"),
+            "retry_attempts": meta.get("RetryAttempts"),
+        }
+    kwargs = getattr(e, "kwargs", None)
+    if isinstance(kwargs, dict):
+        detail["botocore_kwargs"] = {k: str(v)[:200] for k, v in kwargs.items()}
+
+    detail["traceback"] = _tb.format_exc()[-4000:]
+    return detail
+
+
 class BedrockEngine(OCREngine):
     """
     Implementation of OCR engine using Amazon Bedrock
@@ -481,7 +537,13 @@ class BedrockEngine(OCREngine):
                 }
                 
             except Exception as e:
-                logger.error(f"Error in Bedrock processing: {str(e)}")
+                error_detail = _describe_exception(e)
+                _cause = (error_detail.get("cause_chain") or [{}])[0]
+                logger.error(
+                    "Error in Bedrock processing [%s]: %s | root cause: %s %s",
+                    error_detail["type"], str(e),
+                    _cause.get("type", "n/a"), _cause.get("str", ""),
+                )
                 overall_process_time = time.time() - overall_start_time
                 logger.info(f"Bedrock error processing time: {overall_process_time:.2f} seconds")
                 
@@ -563,6 +625,7 @@ class BedrockEngine(OCREngine):
                     max_output_tokens=max_output_tokens,
                     structured_output=supports_structured_output,
                     error=err_msg,
+                    extra={"error_detail": error_detail, "elapsed_s": round(overall_process_time, 3)},
                 )
                 return {
                     "text": f"Amazon Bedrock Error: {str(e)}",
